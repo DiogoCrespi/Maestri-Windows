@@ -1,0 +1,283 @@
+{
+  "payload": {
+    "canvasOrigin": {
+      "x": 9800,
+      "y": 8500
+    },
+    "canvasZoom": 1,
+    "connections": [],
+    "createdAt": "2026-05-16T00:00:00Z",
+    "crossFloorConnections": [],
+    "drawings": [],
+    "floors": [],
+    "icon": "folder",
+    "id": "00000000-0000-0000-0000-000000000001",
+    "isPinned": false,
+    "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+    "locationType": "local",
+    "name": "Test Workspace",
+    "nodes": [
+      {
+        "content": {
+          "terminal": {
+            "_0": {
+              "agentType": "claude_code",
+              "autoScrollLocked": false,
+              "color": "#007AFF",
+              "command": "claude",
+              "icon": "terminal",
+              "id": "00000000-0000-0000-0000-000000000003",
+              "isManager": false,
+              "monitorWithOmbro": false,
+              "name": "Agent Terminal",
+              "scrollbackLineCount": 0,
+              "shellPath": "/bin/zsh",
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "status": "idle",
+              "workingDirectory": "/tmp/test"
+            }
+          }
+        },
+        "createdAt": "2026-05-16T00:00:00Z",
+        "frame": [
+          [
+            100,
+            200
+          ],
+          [
+            400,
+            300
+          ]
+        ],
+        "id": "00000000-0000-0000-0000-000000000002",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.989Z",
+        "zIndex": 0
+      },
+      {
+        "content": {
+          "terminal": {
+            "_0": {
+              "agentType": "claude_code",
+              "autoScrollLocked": false,
+              "color": "#3b82f6",
+              "command": "claude",
+              "icon": "terminal",
+              "id": "628dfa64-a860-451d-8d2a-e4e75c243563",
+              "isManager": false,
+              "monitorWithOmbro": false,
+              "name": "Terminal 2",
+              "scrollbackLineCount": 0,
+              "shellPath": "powershell.exe",
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "status": "idle",
+              "workingDirectory": "C:\\"
+            }
+          }
+        },
+        "createdAt": "2026-08-23T18:51:14.990Z",
+        "frame": [
+          [
+            240,
+            190
+          ],
+          [
+            450,
+            320
+          ]
+        ],
+        "id": "95bcf128-df8d-49c4-bc4f-e39495c7bd5b",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+        "zIndex": 0
+      },
+      {
+        "content": {
+          "terminal": {
+            "_0": {
+              "agentType": "claude_code",
+              "autoScrollLocked": false,
+              "color": "#3b82f6",
+              "command": "claude",
+              "icon": "terminal",
+              "id": "f12c05fb-e8c4-4dfa-bb08-7334d7a5e958",
+              "isManager": false,
+              "monitorWithOmbro": false,
+              "name": "Terminal 3",
+              "scrollbackLineCount": 0,
+              "shellPath": "powershell.exe",
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "status": "idle",
+              "workingDirectory": "C:\\"
+            }
+          }
+        },
+        "createdAt": "2026-08-23T18:51:14.990Z",
+        "frame": [
+          [
+            280,
+            230
+          ],
+          [
+            450,
+            320
+          ]
+        ],
+        "id": "c0536508-00e4-40ee-9c2c-89622b1393b4",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+        "zIndex": 0
+      },
+      {
+        "content": {
+          "stickyNote": {
+            "_0": {
+              "color": "#fef08a",
+              "fontSize": 14,
+              "hasCustomName": true,
+              "isPreviewing": false,
+              "storageMode": {
+                "managed": {}
+              },
+              "text": "",
+              "title": "Nova nota"
+            }
+          }
+        },
+        "createdAt": "2026-08-23T18:51:14.990Z",
+        "frame": [
+          [
+            365,
+            315
+          ],
+          [
+            260,
+            220
+          ]
+        ],
+        "id": "591a7d41-ec51-456a-bcc9-8eef6d0f771b",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+        "zIndex": 0
+      },
+      {
+        "content": {
+          "stickyNote": {
+            "_0": {
+              "color": "#fef08a",
+              "fontSize": 14,
+              "hasCustomName": true,
+              "isPreviewing": false,
+              "storageMode": {
+                "managed": {}
+              },
+              "text": "",
+              "title": "Nova nota"
+            }
+          }
+        },
+        "createdAt": "2026-08-23T18:51:14.990Z",
+        "frame": [
+          [
+            400,
+            350
+          ],
+          [
+            260,
+            220
+          ]
+        ],
+        "id": "52939fb1-1644-49fb-9803-7d3ab4722f8e",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+        "zIndex": 0
+      },
+      {
+        "content": {
+          "stickyNote": {
+            "_0": {
+              "color": "#fef08a",
+              "fontSize": 14,
+              "hasCustomName": true,
+              "isPreviewing": false,
+              "storageMode": {
+                "managed": {}
+              },
+              "text": "",
+              "title": "Nova nota"
+            }
+          }
+        },
+        "createdAt": "2026-08-23T18:51:14.990Z",
+        "frame": [
+          [
+            435,
+            385
+          ],
+          [
+            260,
+            220
+          ]
+        ],
+        "id": "c99d628d-e259-4f1b-a1d4-2048f8baa6ca",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+        "zIndex": 0
+      },
+      {
+        "content": {
+          "terminal": {
+            "_0": {
+              "agentType": "claude_code",
+              "autoScrollLocked": false,
+              "color": "#3b82f6",
+              "command": "claude",
+              "icon": "terminal",
+              "id": "1202e5e2-f90e-44c3-8c30-ca8eb37f4204",
+              "isManager": false,
+              "monitorWithOmbro": false,
+              "name": "Terminal 4",
+              "scrollbackLineCount": 0,
+              "shellPath": "powershell.exe",
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "status": "idle",
+              "workingDirectory": "C:\\"
+            }
+          }
+        },
+        "createdAt": "2026-08-23T18:51:14.990Z",
+        "frame": [
+          [
+            440,
+            390
+          ],
+          [
+            450,
+            320
+          ]
+        ],
+        "id": "571f5395-0af8-4096-b87e-05a8409234ea",
+        "isLocked": false,
+        "lastModifiedAt": "2026-08-23T18:51:14.990Z",
+        "zIndex": 0
+      }
+    ],
+    "noteConnections": [],
+    "noteToNoteConnections": [],
+    "portalConnections": [],
+    "portalToPortalConnections": [],
+    "preferredIDE": "cursor",
+    "syncConfigFiles": false,
+    "workingDirectory": "/tmp/test"
+  },
+  "schemaVersion": 2,
+  "type": "workspace"
+}

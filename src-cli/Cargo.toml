@@ -1,0 +1,11 @@
+[package]
+name = "omaestri"
+version = "0.1.0"
+edition = "2021"
+description = "open-maestri Windows inter-agent CLI"
+
+[[bin]]
+name = "omaestri"
+path = "src/main.rs"
+
+[dependencies]

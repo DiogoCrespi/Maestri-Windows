@@ -1,0 +1,150 @@
+.file-preview-node {
+  width: 100%;
+  height: 100%;
+  min-width: 220px;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  background-color: #1e1e1e;
+  border: 1px solid #333333;
+  border-radius: 6px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #cccccc;
+}
+
+.file-preview-node.selected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+}
+
+.file-preview-handle {
+  width: 8px;
+  height: 8px;
+  background-color: #3b82f6;
+  border-radius: 50%;
+}
+
+.file-preview-header {
+  height: 32px;
+  padding: 0 10px;
+  background-color: #252526;
+  border-bottom: 1px solid #333333;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  cursor: grab;
+}
+
+.file-preview-header:active {
+  cursor: grabbing;
+}
+
+.file-preview-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e1e1e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.file-preview-status {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.file-preview-status-loading {
+  color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.1);
+}
+
+.file-preview-status-pending {
+  color: #facc15;
+  background-color: rgba(250, 204, 21, 0.1);
+}
+
+.file-preview-status-saving {
+  color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.1);
+}
+
+.file-preview-status-saved {
+  color: #4ade80;
+  background-color: rgba(74, 222, 128, 0.1);
+}
+
+.file-preview-status-error {
+  color: #f87171;
+  background-color: rgba(248, 113, 113, 0.1);
+}
+
+.file-preview-status-readonly {
+  color: #9ca3af;
+  background-color: rgba(156, 163, 175, 0.1);
+}
+
+.file-preview-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  background-color: #1e1e1e;
+}
+
+.file-preview-loading {
+  padding: 16px;
+  font-size: 12px;
+  color: #9ca3af;
+  font-style: italic;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.file-preview-error-box {
+  padding: 12px;
+  font-size: 12px;
+  color: #f87171;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.file-preview-error-box code {
+  background-color: rgba(248, 113, 113, 0.1);
+  padding: 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.file-preview-textarea {
+  width: 100%;
+  height: 100%;
+  padding: 8px 10px;
+  background-color: transparent;
+  color: #d4d4d4;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.file-preview-textarea[readonly] {
+  color: #9ca3af;
+  background-color: #181818;
+  cursor: default;
+}

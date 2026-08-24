@@ -1,0 +1,130 @@
+.terminal-settings {
+  width: min(100%, 360px);
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #18181bf2;
+  color: #f4f4f5;
+  font: 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.terminal-settings fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.terminal-settings legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: #fafafa;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.terminal-settings-grid {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px 8px;
+}
+
+.terminal-settings label {
+  color: #a1a1aa;
+  font-weight: 550;
+}
+
+.terminal-settings input,
+.terminal-settings select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 6px 7px;
+  border: 1px solid #52525b;
+  border-radius: 5px;
+  outline: none;
+  background: #09090b;
+  color: #f4f4f5;
+  font: inherit;
+}
+
+.terminal-settings input:focus,
+.terminal-settings select:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px #2563eb55;
+}
+
+.terminal-settings input[aria-invalid="true"],
+.terminal-settings select[aria-invalid="true"] {
+  border-color: #f87171;
+}
+
+.terminal-settings input::placeholder {
+  color: #71717a;
+}
+
+.terminal-settings-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #f4f4f5;
+  cursor: pointer;
+}
+
+.terminal-settings-checkbox input {
+  width: auto;
+  margin: 0;
+  accent-color: #3b82f6;
+}
+
+.terminal-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.terminal-settings-status {
+  min-width: 0;
+  overflow: hidden;
+  color: #a1a1aa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-settings button {
+  flex: 0 0 auto;
+  padding: 6px 11px;
+  border: 1px solid #2563eb;
+  border-radius: 5px;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.terminal-settings button:hover:not(:disabled) {
+  background: #3b82f6;
+}
+
+.terminal-settings button:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.terminal-settings button:disabled,
+.terminal-settings input:disabled,
+.terminal-settings select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.terminal-settings-error {
+  margin: 8px 0 0;
+  color: #fca5a5;
+}

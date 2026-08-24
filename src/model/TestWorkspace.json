@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "type": "workspace",
+  "payload": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "name": "Test Workspace",
+    "icon": "folder",
+    "isPinned": false,
+    "locationType": "local",
+    "workingDirectory": "/tmp/test",
+    "preferredIDE": "cursor",
+    "syncConfigFiles": false,
+    "canvasOrigin": { "x": 9800, "y": 8500 },
+    "canvasZoom": 1.0,
+    "nodes": [
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "frame": [[100.0, 200.0], [400.0, 300.0]],
+        "content": {
+          "terminal": {
+            "_0": {
+              "agentType": "claude_code",
+              "command": "claude",
+              "name": "Agent Terminal",
+              "icon": "terminal",
+              "color": "#007AFF",
+              "id": "00000000-0000-0000-0000-000000000003",
+              "shellPath": "/bin/zsh",
+              "workingDirectory": "/tmp/test",
+              "status": "idle",
+              "isManager": false,
+              "monitorWithOmbro": false,
+              "autoScrollLocked": false,
+              "shortcutMode": { "kind": "automatic" },
+              "scrollbackLineCount": 0
+            }
+          }
+        },
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T00:00:00Z",
+        "lastModifiedAt": "2026-05-16T00:00:00Z"
+      }
+    ],
+    "connections": [],
+    "noteConnections": [],
+    "portalConnections": [],
+    "portalToPortalConnections": [],
+    "noteToNoteConnections": [],
+    "crossFloorConnections": [],
+    "floors": [],
+    "drawings": [],
+    "createdAt": "2026-05-16T00:00:00Z",
+    "lastModifiedAt": "2026-05-16T00:00:00Z"
+  }
+}
