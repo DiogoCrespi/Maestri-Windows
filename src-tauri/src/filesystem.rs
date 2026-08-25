@@ -30,6 +30,7 @@ const DEFAULT_MAX_ENTRIES: usize = 1000;
 pub fn list_directory(
     path: String,
     max_entries: Option<usize>,
+    include_hidden: Option<bool>,
 ) -> Result<DirectoryListing, String> {
     let trimmed_path = path.trim();
     if trimmed_path.is_empty() {
@@ -49,6 +50,7 @@ pub fn list_directory(
     }
 
     let limit = max_entries.unwrap_or(DEFAULT_MAX_ENTRIES).clamp(1, 5000);
+    let show_hidden = include_hidden.unwrap_or(false);
 
     let read_dir = fs::read_dir(&target_path).map_err(|err| {
         format!(
@@ -62,11 +64,6 @@ pub fn list_directory(
     let mut is_truncated = false;
 
     for item in read_dir {
-        if entries.len() >= limit {
-            is_truncated = true;
-            break;
-        }
-
         let entry = match item {
             Ok(e) => e,
             Err(_) => continue,
@@ -74,6 +71,15 @@ pub fn list_directory(
 
         let file_path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
+
+        if !show_hidden && is_hidden_file(&name, &file_path) {
+            continue;
+        }
+
+        if entries.len() >= limit {
+            is_truncated = true;
+            break;
+        }
 
         let metadata = entry.metadata().ok();
         let file_type = metadata.as_ref().map(|m| m.file_type());
@@ -100,11 +106,12 @@ pub fn list_directory(
         });
     }
 
-    // Ordenar diretórios primeiro, depois arquivos alfabeticamente
+    // Ordenar diretórios primeiro, depois arquivos alfabeticamente (ordenação determinística)
     entries.sort_by(|a, b| {
         b.is_dir
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
     });
 
     let total_entries = entries.len();
@@ -117,6 +124,23 @@ pub fn list_directory(
     })
 }
 
+fn is_hidden_file(name: &str, _path: &std::path::Path) -> bool {
+    if name.starts_with('.') {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if let Ok(metadata) = _path.metadata() {
+            // FILE_ATTRIBUTE_HIDDEN = 0x2
+            if (metadata.file_attributes() & 0x2) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,18 +149,18 @@ mod tests {
 
     #[test]
     fn test_list_directory_empty_path_error() {
-        let res = list_directory("".to_string(), None);
+        let res = list_directory("".to_string(), None, None);
         assert!(res.is_err());
         assert_eq!(res.unwrap_err(), "Path cannot be empty");
 
-        let res_whitespace = list_directory("   ".to_string(), None);
+        let res_whitespace = list_directory("   ".to_string(), None, None);
         assert!(res_whitespace.is_err());
         assert_eq!(res_whitespace.unwrap_err(), "Path cannot be empty");
     }
 
     #[test]
     fn test_list_directory_non_existent_path() {
-        let res = list_directory("C:\\non_existent_path_xyz_12345".to_string(), None);
+        let res = list_directory("C:\\non_existent_path_xyz_12345".to_string(), None, None);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Path does not exist"));
     }
@@ -150,7 +174,7 @@ mod tests {
         File::create(&file_path).unwrap();
         fs::create_dir(&sub_dir_path).unwrap();
 
-        let listing = list_directory(dir.path().to_string_lossy().to_string(), None).unwrap();
+        let listing = list_directory(dir.path().to_string_lossy().to_string(), None, None).unwrap();
 
         assert_eq!(listing.total_entries, 2);
         assert!(!listing.is_truncated);
@@ -170,9 +194,36 @@ mod tests {
             File::create(dir.path().join(format!("file_{}.txt", i))).unwrap();
         }
 
-        let listing = list_directory(dir.path().to_string_lossy().to_string(), Some(5)).unwrap();
+        let listing = list_directory(dir.path().to_string_lossy().to_string(), Some(5), None).unwrap();
 
         assert_eq!(listing.entries.len(), 5);
         assert!(listing.is_truncated);
+    }
+
+    #[test]
+    fn test_list_directory_hidden_files_filtering() {
+        let dir = tempdir().unwrap();
+        File::create(dir.path().join(".hidden_file")).unwrap();
+        File::create(dir.path().join("visible_file.txt")).unwrap();
+
+        let default_listing = list_directory(dir.path().to_string_lossy().to_string(), None, None).unwrap();
+        assert_eq!(default_listing.entries.len(), 1);
+        assert_eq!(default_listing.entries[0].name, "visible_file.txt");
+
+        let hidden_listing = list_directory(dir.path().to_string_lossy().to_string(), None, Some(true)).unwrap();
+        assert_eq!(hidden_listing.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_list_directory_deterministic_sorting() {
+        let dir = tempdir().unwrap();
+        File::create(dir.path().join("b.txt")).unwrap();
+        File::create(dir.path().join("a.txt")).unwrap();
+        fs::create_dir(dir.path().join("Z_folder")).unwrap();
+        fs::create_dir(dir.path().join("a_folder")).unwrap();
+
+        let listing = list_directory(dir.path().to_string_lossy().to_string(), None, None).unwrap();
+        let names: Vec<String> = listing.entries.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names, vec!["a_folder", "Z_folder", "a.txt", "b.txt"]);
     }
 }

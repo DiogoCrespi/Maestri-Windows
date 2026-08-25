@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { NodeProps, NodeResizer } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
+import { useWorkspaceStore } from "../store/workspaceStore";
+import type { FileTreeContent } from "../model/workspace";
 import "./FileTreeNode.css";
 
 export interface FileEntryPayload {
@@ -20,22 +22,17 @@ export interface DirectoryListingPayload {
   isTruncated: boolean;
 }
 
-export interface FileTreeNodeContent {
-  name?: string;
-  rootPath?: string;
-  viewMode?: string;
-}
-
 export interface FileTreeNodeData {
-  content?: FileTreeNodeContent;
+  content?: FileTreeContent;
   rootPath?: string;
   title?: string;
+  viewMode?: "list" | "grid";
   onFileSelect?: (entry: FileEntryPayload) => void;
   onClose?: () => void;
   [key: string]: unknown;
 }
 
-export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
+export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const nodeData = data as unknown as FileTreeNodeData;
   const initialRootPath =
     nodeData?.rootPath || nodeData?.content?.rootPath || "C:\\";
@@ -48,12 +45,41 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedEntryPath, setSelectedEntryPath] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState<boolean>(false);
+
+  const viewMode: "list" | "grid" =
+    nodeData?.content?.viewMode === "grid" || nodeData?.viewMode === "grid" ? "grid" : "list";
 
   useEffect(() => {
     setCurrentPath((current) => current === initialRootPath ? current : initialRootPath);
     setHistory([]);
     setSelectedEntryPath(null);
   }, [initialRootPath]);
+
+  const handleToggleViewMode = () => {
+    const nextMode: "list" | "grid" = viewMode === "list" ? "grid" : "list";
+    const store = useWorkspaceStore.getState();
+    const updatedNodes = store.nodes.map((node) => {
+      if (node.id !== id) return node;
+      const currentData = (node.data || {}) as Record<string, unknown>;
+      const existingContent = (currentData.content || {}) as Record<string, unknown>;
+      return {
+        ...node,
+        data: {
+          ...currentData,
+          content: {
+            ...existingContent,
+            viewMode: nextMode,
+          },
+        },
+      };
+    });
+    store.setNodes(updatedNodes, { dirty: true });
+  };
+
+  const handleToggleShowHidden = () => {
+    setShowHidden((prev) => !prev);
+  };
 
   const fetchDirectory = useCallback(async (dirPath: string) => {
     setIsLoading(true);
@@ -62,6 +88,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
       const res = await invoke<DirectoryListingPayload>("list_directory", {
         path: dirPath,
         maxEntries: 500,
+        includeHidden: showHidden,
       });
       setEntries(res.entries);
       setCurrentPath(res.path);
@@ -76,7 +103,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [showHidden]);
 
   useEffect(() => {
     fetchDirectory(currentPath);
@@ -121,7 +148,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
   };
 
   return (
-    <div className={`file-tree-node-container ${selected ? "selected" : ""}`}>
+    <div className={`file-tree-node-container ${selected ? "selected" : ""}`} data-node-id={id}>
       <NodeResizer
         minWidth={220}
         minHeight={200}
@@ -138,14 +165,34 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
         </div>
         <div className="header-actions nodrag">
           <button
+            type="button"
+            className={`action-btn view-toggle-btn ${viewMode === "grid" ? "active" : ""}`}
+            onClick={handleToggleViewMode}
+            title={viewMode === "list" ? "Alternar para Grid" : "Alternar para Lista"}
+            aria-label={viewMode === "list" ? "Alternar para Grid" : "Alternar para Lista"}
+          >
+            {viewMode === "list" ? "⊞" : "☰"}
+          </button>
+          <button
+            type="button"
+            className={`action-btn hidden-toggle-btn ${showHidden ? "active" : ""}`}
+            onClick={handleToggleShowHidden}
+            title={showHidden ? "Ocultar arquivos do sistema" : "Mostrar arquivos ocultos"}
+            aria-label={showHidden ? "Ocultar arquivos do sistema" : "Mostrar arquivos ocultos"}
+          >
+            {showHidden ? "👁️" : "🙈"}
+          </button>
+          <button
+            type="button"
             className="action-btn"
             onClick={handleGoBack}
             disabled={history.length === 0}
             title="Go Back"
+            aria-label="Voltar pasta"
           >
             ←
           </button>
-          <button className="action-btn" onClick={handleRefresh} title="Refresh">
+          <button type="button" className="action-btn" onClick={handleRefresh} title="Refresh" aria-label="Atualizar pasta">
             ↻
           </button>
           <button
@@ -171,7 +218,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
         </span>
       </div>
 
-      {/* Main File List View (Scrollable, nodrag, nowheel for canvas stability) */}
+      {/* Main File View (Scrollable, nodrag, nowheel for canvas stability) */}
       <div className="file-tree-body nodrag nowheel">
         {isLoading && (
           <div className="loading-state">
@@ -193,30 +240,54 @@ export const FileTreeNode: React.FC<NodeProps> = ({ selected, data }) => {
         )}
 
         {!isLoading && !error && entries.length > 0 && (
-          <ul className="file-tree-list">
-            {entries.map((entry) => (
-              <li
-                key={entry.path}
-                className={`file-tree-item ${
-                  selectedEntryPath === entry.path ? "item-selected" : ""
-                }`}
-                draggable={entry.isFile}
-                onClick={() => handleItemClick(entry)}
-                onDoubleClick={() => handleItemDoubleClick(entry)}
-                onDragStart={(event) => handleDragStart(event, entry)}
-              >
-                <span className="item-icon">
-                  {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
-                </span>
-                <span className="item-name">{entry.name}</span>
-                {entry.isFile && (
-                  <span className="item-size">
-                    {formatBytes(entry.size)}
+          viewMode === "grid" ? (
+            <div className="file-tree-grid" role="list">
+              {entries.map((entry) => (
+                <div
+                  key={entry.path}
+                  role="listitem"
+                  className={`file-tree-grid-item ${
+                    selectedEntryPath === entry.path ? "item-selected" : ""
+                  }`}
+                  draggable={entry.isFile}
+                  onClick={() => handleItemClick(entry)}
+                  onDoubleClick={() => handleItemDoubleClick(entry)}
+                  onDragStart={(event) => handleDragStart(event, entry)}
+                  title={`${entry.name}${entry.isFile ? ` (${formatBytes(entry.size)})` : ""}`}
+                >
+                  <span className="grid-item-icon">
+                    {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
                   </span>
-                )}
-              </li>
-            ))}
-          </ul>
+                  <span className="grid-item-name">{entry.name}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ul className="file-tree-list">
+              {entries.map((entry) => (
+                <li
+                  key={entry.path}
+                  className={`file-tree-item ${
+                    selectedEntryPath === entry.path ? "item-selected" : ""
+                  }`}
+                  draggable={entry.isFile}
+                  onClick={() => handleItemClick(entry)}
+                  onDoubleClick={() => handleItemDoubleClick(entry)}
+                  onDragStart={(event) => handleDragStart(event, entry)}
+                >
+                  <span className="item-icon">
+                    {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
+                  </span>
+                  <span className="item-name">{entry.name}</span>
+                  {entry.isFile && (
+                    <span className="item-size">
+                      {formatBytes(entry.size)}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )
         )}
       </div>
     </div>

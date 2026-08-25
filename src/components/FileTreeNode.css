@@ -177,9 +177,50 @@
   color: #71717a;
 }
 
-.file-tree-handle {
-  width: 10px !important;
-  height: 10px !important;
-  background-color: #10b981 !important;
-  border: 2px solid #18181b !important;
+.action-btn.active {
+  background-color: #3f3f46;
+  color: #10b981;
+}
+
+.file-tree-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.file-tree-grid-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.file-tree-grid-item:hover {
+  background-color: #27272a;
+}
+
+.file-tree-grid-item.item-selected {
+  background-color: #374151;
+  color: #ffffff;
+}
+
+.grid-item-icon {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.grid-item-name {
+  font-size: 11px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
