@@ -10,6 +10,7 @@ import {
   duplicateCanvasNode,
   isCanvasBackgroundTarget,
   mergeTerminalScrollbackMetadata,
+  reduceCanvasEscapeKey,
   snapCanvasPosition,
   validatedCanvasDrawings,
 } from "./CanvasWorkspace";
@@ -162,5 +163,44 @@ describe("Freehand stroke calculations and background target safety", () => {
     expect(isCanvasBackgroundTarget(mockElement(["button"]))).toBe(false);
     expect(isCanvasBackgroundTarget(mockElement(["input"]))).toBe(false);
     expect(isCanvasBackgroundTarget(null)).toBe(false);
+  });
+
+  it("handles Escape key transitions: cancels active drawing stroke and resets active tool", () => {
+    // Case 1: Escape while actively drawing -> cancels stroke and clears points
+    const activeDrawingState = {
+      activeTool: "pen" as const,
+      isDrawing: true,
+      drawingPoints: [{ x: 10, y: 20 }, { x: 30, y: 40 }],
+    };
+    const cancelResult = reduceCanvasEscapeKey(activeDrawingState);
+    expect(cancelResult.handled).toBe(true);
+    expect(cancelResult.cancelledDrawing).toBe(true);
+    expect(cancelResult.resettedTool).toBe(false);
+    expect(cancelResult.nextState.isDrawing).toBe(false);
+    expect(cancelResult.nextState.drawingPoints).toEqual([]);
+    expect(cancelResult.nextState.activeTool).toBe("pen");
+
+    // Case 2: Escape while pen/highlighter tool is selected (not drawing) -> resets tool to select
+    const toolSelectedState = {
+      activeTool: "highlighter" as const,
+      isDrawing: false,
+      drawingPoints: [],
+    };
+    const resetResult = reduceCanvasEscapeKey(toolSelectedState);
+    expect(resetResult.handled).toBe(true);
+    expect(resetResult.cancelledDrawing).toBe(false);
+    expect(resetResult.resettedTool).toBe(true);
+    expect(resetResult.nextState.activeTool).toBe("select");
+
+    // Case 3: Escape while in default select tool -> ignored
+    const defaultState = {
+      activeTool: "select" as const,
+      isDrawing: false,
+      drawingPoints: [],
+    };
+    const defaultResult = reduceCanvasEscapeKey(defaultState);
+    expect(defaultResult.handled).toBe(false);
+    expect(defaultResult.cancelledDrawing).toBe(false);
+    expect(defaultResult.resettedTool).toBe(false);
   });
 });

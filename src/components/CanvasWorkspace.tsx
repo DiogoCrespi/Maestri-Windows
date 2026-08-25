@@ -237,6 +237,51 @@ export function isCanvasBackgroundTarget(target: unknown): boolean {
   return true;
 }
 
+export interface CanvasFreehandState {
+  activeTool: "select" | "pen" | "highlighter";
+  isDrawing: boolean;
+  drawingPoints: Array<{ x: number; y: number }>;
+}
+
+export interface ReduceEscapeKeyResult {
+  nextState: CanvasFreehandState;
+  handled: boolean;
+  cancelledDrawing: boolean;
+  resettedTool: boolean;
+}
+
+export function reduceCanvasEscapeKey(state: CanvasFreehandState): ReduceEscapeKeyResult {
+  if (state.isDrawing) {
+    return {
+      nextState: {
+        ...state,
+        isDrawing: false,
+        drawingPoints: [],
+      },
+      handled: true,
+      cancelledDrawing: true,
+      resettedTool: false,
+    };
+  }
+  if (state.activeTool !== "select") {
+    return {
+      nextState: {
+        ...state,
+        activeTool: "select",
+      },
+      handled: true,
+      cancelledDrawing: false,
+      resettedTool: true,
+    };
+  }
+  return {
+    nextState: state,
+    handled: false,
+    cancelledDrawing: false,
+    resettedTool: false,
+  };
+}
+
 export interface TerminalScrollbackMetadata {
   scrollbackFile?: string | null;
   scrollbackLineCount?: number;
@@ -407,6 +452,13 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingPoints, setDrawingPoints] = useState<Array<{ x: number; y: number }>>([]);
   const pointerIdRef = useRef<number | null>(null);
+  const capturedElementRef = useRef<HTMLElement | null>(null);
+
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
+  const isDrawingRef = useRef(isDrawing);
+  isDrawingRef.current = isDrawing;
+
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [gridSize, setGridSize] = useState(CANVAS_GRID_SPACING);
   const [showJumpBadges, setShowJumpBadges] = useState(false);
@@ -416,13 +468,35 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
   const [terminalSettingsNodeId, setTerminalSettingsNodeId] = useState<string | null>(null);
   const [routinesWorkspaceError, setRoutinesWorkspaceError] = useState<string | null>(null);
 
+  const releasePointerCapture = useCallback(() => {
+    if (pointerIdRef.current !== null && capturedElementRef.current) {
+      try {
+        if (capturedElementRef.current.hasPointerCapture(pointerIdRef.current)) {
+          capturedElementRef.current.releasePointerCapture(pointerIdRef.current);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    pointerIdRef.current = null;
+    capturedElementRef.current = null;
+  }, []);
+
+  const cancelFreehandDrawing = useCallback(() => {
+    releasePointerCapture();
+    setIsDrawing(false);
+    setDrawingPoints([]);
+  }, [releasePointerCapture]);
+
   const onPointerDownWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (activeTool === "select") return;
     if (!isCanvasBackgroundTarget(event.target)) return;
 
+    const element = event.currentTarget as HTMLElement;
     try {
-      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      element.setPointerCapture(event.pointerId);
       pointerIdRef.current = event.pointerId;
+      capturedElementRef.current = element;
     } catch {
       // ignore
     }
@@ -446,16 +520,9 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     });
   }, [isDrawing, screenToFlowPosition]);
 
-  const onPointerUpWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const onPointerUpWorkspace = useCallback((_event: React.PointerEvent<HTMLDivElement>) => {
     if (!isDrawing) return;
-    if (pointerIdRef.current !== null && event.currentTarget.hasPointerCapture(pointerIdRef.current)) {
-      try {
-        event.currentTarget.releasePointerCapture(pointerIdRef.current);
-      } catch {
-        // ignore
-      }
-    }
-    pointerIdRef.current = null;
+    releasePointerCapture();
 
     if (drawingPoints.length >= 2) {
       const strokeWidth = activeTool === "highlighter" ? 20 : 4;
@@ -478,21 +545,12 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
 
     setIsDrawing(false);
     setDrawingPoints([]);
-  }, [activeTool, addNode, drawingPoints, isDrawing]);
+  }, [activeTool, addNode, drawingPoints, isDrawing, releasePointerCapture]);
 
-  const onPointerCancelWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const onPointerCancelWorkspace = useCallback((_event: React.PointerEvent<HTMLDivElement>) => {
     if (!isDrawing) return;
-    if (pointerIdRef.current !== null && event.currentTarget.hasPointerCapture(pointerIdRef.current)) {
-      try {
-        event.currentTarget.releasePointerCapture(pointerIdRef.current);
-      } catch {
-        // ignore
-      }
-    }
-    pointerIdRef.current = null;
-    setIsDrawing(false);
-    setDrawingPoints([]);
-  }, [isDrawing]);
+    cancelFreehandDrawing();
+  }, [cancelFreehandDrawing, isDrawing]);
   const routinesWorkspacePath = workspacePath?.trim() || "";
   const workspaceDirectory = workspaceFallbackDirectory(
     currentDocument?.payload.workingDirectory,
@@ -938,14 +996,19 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isEditing()) return;
       if (event.key === "Escape") {
-        if (isDrawing) {
+        const currentCanvasState: CanvasFreehandState = {
+          activeTool: activeToolRef.current,
+          isDrawing: isDrawingRef.current,
+          drawingPoints,
+        };
+        const escapeResult = reduceCanvasEscapeKey(currentCanvasState);
+        if (escapeResult.handled) {
           event.preventDefault();
-          pointerIdRef.current = null;
-          setIsDrawing(false);
-          setDrawingPoints([]);
-        } else if (activeTool !== "select") {
-          event.preventDefault();
-          setActiveTool("select");
+          if (escapeResult.cancelledDrawing) {
+            cancelFreehandDrawing();
+          } else if (escapeResult.resettedTool) {
+            setActiveTool("select");
+          }
         }
       }
       const modified = event.metaKey || event.ctrlKey;
@@ -980,7 +1043,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     return () => { window.removeEventListener("keydown", handleKeyDown); window.removeEventListener("keyup", handleKeyUp); };
-  }, [duplicateSelectedNode, edges, getZoom, jumpMap, nodes, setCenter, setEdges, setNodes, setViewport]);
+  }, [cancelFreehandDrawing, drawingPoints, duplicateSelectedNode, edges, getZoom, jumpMap, nodes, setCenter, setEdges, setNodes, setViewport]);
 
   return (
     <div
