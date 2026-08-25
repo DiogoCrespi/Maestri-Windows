@@ -240,8 +240,8 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(state.serializeWorkspace().payload.canvasZoom).toBe(1.35);
   });
 
-  it("loads golden fixture into workspaceStore, converts all 12 nodes & 6 connection types, and serializes back with 100% data preservation", async () => {
-    const goldenFixture = await import("../../tests/fixtures/macOS_v2_golden_workspace.json");
+  it("loads comprehensive golden fixture into workspaceStore, converts all 12 nodes & 6 connection types, and serializes back with 100% data preservation", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_comprehensive_golden_workspace.json");
     const store = useWorkspaceStore.getState();
 
     store.loadWorkspace(goldenFixture.default);
@@ -253,7 +253,7 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(loadedState.isDirty).toBe(false);
 
     // Modify a node position (simulating user dragging a node)
-    store.updateNodePosition("canvas-node-terminal-1", { x: 250.5, y: 350.5 });
+    store.updateNodePosition("20000000-0000-0000-0000-000000000001", { x: 250.5, y: 350.5 });
     expect(useWorkspaceStore.getState().isDirty).toBe(true);
 
     const serialized = store.serializeWorkspace();
@@ -268,7 +268,7 @@ describe("workspaceStore & React Flow Conversions", () => {
     });
 
     // Validate node unknown field & updated position
-    const serializedTermNode = serialized.payload.nodes.find((n) => n.id === "canvas-node-terminal-1");
+    const serializedTermNode = serialized.payload.nodes.find((n) => n.id === "20000000-0000-0000-0000-000000000001");
     expect(serializedTermNode).toBeDefined();
     expect(serializedTermNode?.frame).toEqual([[250.5, 350.5], [600, 400]]);
     expect((serializedTermNode as unknown as Record<string, unknown>).customNodeMeta).toBe("term-node-attr");
@@ -295,4 +295,5 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect((serialized.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
   });
 });
+
 

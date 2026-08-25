@@ -1,11 +1,11 @@
 {
-  "_originDescription": "Self-contained golden fixture originating from Maestri macOS v2 persistence schema specification (Sources/Workspace/Models).",
+  "_originDescription": "Self-contained comprehensive golden fixture originating from Maestri macOS v2 persistence schema specification (Sources/Workspace/Models).",
   "schemaVersion": 2,
   "type": "workspace",
   "customDocumentMeta": "macOS-v2-golden-root-meta",
   "payload": {
-    "id": "11111111-1111-1111-1111-111111111111",
-    "name": "macOS v2 Golden Compatibility Workspace",
+    "id": "10000000-0000-0000-0000-000000000001",
+    "name": "macOS v2 Comprehensive Golden Compatibility Workspace",
     "icon": "folder",
     "isPinned": true,
     "locationType": "local",
@@ -26,7 +26,7 @@
     "lastModifiedAt": "2026-05-16T12:30:00.000Z",
     "nodes": [
       {
-        "id": "canvas-node-terminal-1",
+        "id": "20000000-0000-0000-0000-000000000001",
         "frame": [
           [100.5, 200.5],
           [600.0, 400.0]
@@ -39,7 +39,7 @@
         "content": {
           "terminal": {
             "_0": {
-              "id": "terminal-content-uuid-1",
+              "id": "30000000-0000-0000-0000-000000000001",
               "agentType": "claude_code",
               "command": "claude",
               "name": "Primary Terminal Agent",
@@ -54,7 +54,7 @@
               "shortcutMode": {
                 "kind": "automatic"
               },
-              "assignedRoleId": "role-uuid-9999",
+              "assignedRoleId": "40000000-0000-0000-0000-000000000001",
               "scrollbackFile": "/tmp/scrollback.log",
               "scrollbackLineCount": 1500,
               "lastActiveAt": "2026-05-16T11:00:00.000Z",
@@ -67,7 +67,7 @@
         }
       },
       {
-        "id": "canvas-node-terminal-2",
+        "id": "20000000-0000-0000-0000-000000000002",
         "frame": [
           [800.0, 200.0],
           [600.0, 400.0]
@@ -79,7 +79,7 @@
         "content": {
           "terminal": {
             "_0": {
-              "id": "terminal-content-uuid-2",
+              "id": "30000000-0000-0000-0000-000000000002",
               "agentType": "codex",
               "command": "codex",
               "name": "Secondary Terminal Agent",
@@ -100,7 +100,7 @@
         }
       },
       {
-        "id": "canvas-node-note-1",
+        "id": "20000000-0000-0000-0000-000000000003",
         "frame": [
           [150.0, 650.0],
           [300.0, 250.0]
@@ -126,7 +126,7 @@
         }
       },
       {
-        "id": "canvas-node-note-2",
+        "id": "20000000-0000-0000-0000-000000000004",
         "frame": [
           [500.0, 650.0],
           [300.0, 250.0]
@@ -153,7 +153,7 @@
         }
       },
       {
-        "id": "canvas-node-portal-1",
+        "id": "20000000-0000-0000-0000-000000000005",
         "frame": [
           [900.0, 650.0],
           [500.0, 350.0]
@@ -165,7 +165,7 @@
         "content": {
           "portal": {
             "_0": {
-              "id": "portal-content-uuid-1",
+              "id": "30000000-0000-0000-0000-000000000005",
               "name": "Documentation Portal",
               "currentURL": "https://docs.maestri.dev",
               "source": {
@@ -181,7 +181,7 @@
         }
       },
       {
-        "id": "canvas-node-portal-2",
+        "id": "20000000-0000-0000-0000-000000000006",
         "frame": [
           [1450.0, 650.0],
           [500.0, 350.0]
@@ -193,7 +193,7 @@
         "content": {
           "portal": {
             "_0": {
-              "id": "portal-content-uuid-2",
+              "id": "30000000-0000-0000-0000-000000000006",
               "name": "Dashboard Portal",
               "currentURL": "https://dashboard.maestri.dev",
               "source": {
@@ -207,7 +207,7 @@
         }
       },
       {
-        "id": "canvas-node-filetree-1",
+        "id": "20000000-0000-0000-0000-000000000007",
         "frame": [
           [100.0, 1050.0],
           [400.0, 500.0]
@@ -227,7 +227,7 @@
         }
       },
       {
-        "id": "canvas-node-text-1",
+        "id": "20000000-0000-0000-0000-000000000008",
         "frame": [
           [550.0, 1050.0],
           [300.0, 100.0]
@@ -250,7 +250,7 @@
         }
       },
       {
-        "id": "canvas-node-shape-1",
+        "id": "20000000-0000-0000-0000-000000000009",
         "frame": [
           [900.0, 1050.0],
           [200.0, 200.0]
@@ -276,7 +276,7 @@
         }
       },
       {
-        "id": "canvas-node-stroke-1",
+        "id": "20000000-0000-0000-0000-000000000010",
         "frame": [
           [1150.0, 1050.0],
           [250.0, 150.0]
@@ -309,7 +309,7 @@
         }
       },
       {
-        "id": "canvas-node-freehand-1",
+        "id": "20000000-0000-0000-0000-000000000011",
         "frame": [
           [1450.0, 1050.0],
           [300.0, 300.0]
@@ -345,7 +345,7 @@
         }
       },
       {
-        "id": "canvas-node-legacy-1",
+        "id": "20000000-0000-0000-0000-000000000012",
         "frame": [
           [50.0, 50.0],
           [200.0, 100.0]
@@ -367,10 +367,10 @@
     ],
     "connections": [
       {
-        "id": "conn-term-to-term-1",
+        "id": "50000000-0000-0000-0000-000000000001",
         "createdAt": "2026-05-16T10:30:00.000Z",
-        "terminalIdA": "terminal-content-uuid-1",
-        "terminalIdB": "terminal-content-uuid-2",
+        "terminalIdA": "30000000-0000-0000-0000-000000000001",
+        "terminalIdB": "30000000-0000-0000-0000-000000000002",
         "ropePoints": [
           [100.0, 200.0],
           [450.0, 300.0],
@@ -381,10 +381,10 @@
     ],
     "noteConnections": [
       {
-        "id": "conn-term-to-note-1",
+        "id": "50000000-0000-0000-0000-000000000002",
         "createdAt": "2026-05-16T10:31:00.000Z",
-        "terminalId": "terminal-content-uuid-1",
-        "noteNodeId": "canvas-node-note-1",
+        "terminalId": "30000000-0000-0000-0000-000000000001",
+        "noteNodeId": "20000000-0000-0000-0000-000000000003",
         "ropePoints": [
           [100.0, 400.0],
           [150.0, 650.0]
@@ -393,10 +393,10 @@
     ],
     "portalConnections": [
       {
-        "id": "conn-term-to-portal-1",
+        "id": "50000000-0000-0000-0000-000000000003",
         "createdAt": "2026-05-16T10:32:00.000Z",
-        "terminalId": "terminal-content-uuid-1",
-        "portalNodeId": "canvas-node-portal-1",
+        "terminalId": "30000000-0000-0000-0000-000000000001",
+        "portalNodeId": "20000000-0000-0000-0000-000000000005",
         "ropePoints": [
           [600.0, 400.0],
           [900.0, 650.0]
@@ -405,10 +405,10 @@
     ],
     "portalToPortalConnections": [
       {
-        "id": "conn-portal-to-portal-1",
+        "id": "50000000-0000-0000-0000-000000000004",
         "createdAt": "2026-05-16T10:33:00.000Z",
-        "portalIdA": "canvas-node-portal-1",
-        "portalIdB": "canvas-node-portal-2",
+        "portalIdA": "20000000-0000-0000-0000-000000000005",
+        "portalIdB": "20000000-0000-0000-0000-000000000006",
         "ropePoints": [
           [1400.0, 800.0],
           [1450.0, 800.0]
@@ -417,10 +417,10 @@
     ],
     "noteToNoteConnections": [
       {
-        "id": "conn-note-to-note-1",
+        "id": "50000000-0000-0000-0000-000000000005",
         "createdAt": "2026-05-16T10:34:00.000Z",
-        "noteNodeIdA": "canvas-node-note-1",
-        "noteNodeIdB": "canvas-node-note-2",
+        "noteNodeIdA": "20000000-0000-0000-0000-000000000003",
+        "noteNodeIdB": "20000000-0000-0000-0000-000000000004",
         "ropePoints": [
           [450.0, 775.0],
           [500.0, 775.0]
@@ -429,12 +429,12 @@
     ],
     "crossFloorConnections": [
       {
-        "id": "conn-cross-floor-1",
+        "id": "50000000-0000-0000-0000-000000000006",
         "createdAt": "2026-05-16T10:35:00.000Z",
-        "nodeIdA": "canvas-node-terminal-1",
+        "nodeIdA": "20000000-0000-0000-0000-000000000001",
         "floorIdA": null,
-        "nodeIdB": "canvas-node-terminal-2",
-        "floorIdB": "floor-uuid-200",
+        "nodeIdB": "20000000-0000-0000-0000-000000000002",
+        "floorIdB": "60000000-0000-0000-0000-000000000001",
         "ropePoints": [
           [300.0, 200.0],
           [800.0, 200.0]
@@ -444,7 +444,7 @@
     ],
     "floors": [
       {
-        "id": "floor-uuid-200",
+        "id": "60000000-0000-0000-0000-000000000001",
         "name": "Feature Branch Floor",
         "branchName": "feat/mac-win-compat",
         "worktreePath": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
@@ -458,7 +458,7 @@
     ],
     "drawings": [
       {
-        "id": "drawing-uuid-300",
+        "id": "70000000-0000-0000-0000-000000000001",
         "points": [
           [10.0, 10.0],
           [50.0, 50.0],

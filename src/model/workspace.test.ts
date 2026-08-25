@@ -75,8 +75,82 @@ describe("Workspace Model & Persistence Schema", () => {
     expect(doc.payload.isPinned).toBe(false);
   });
 
-  it("parses macOS v2 golden fixture with all 8 node types, 6 connection types, floors, drawings, and unknown fields", async () => {
-    const goldenFixture = await import("../../tests/fixtures/macOS_v2_golden_workspace.json");
+  it("parses macOS v2 minimal fixture without external path dependency", async () => {
+    const minimalFixture = await import("../../tests/fixtures/macOS_v2_minimal_workspace.json");
+    const doc = parseWorkspaceDocument(minimalFixture.default);
+    expect(doc.schemaVersion).toBe(2);
+    expect(doc.type).toBe("workspace");
+    expect(doc.payload.id).toBe("00000000-0000-0000-0000-000000000001");
+    expect(doc.payload.name).toBe("Test Workspace");
+  });
+
+  it("parses macOS v2 comprehensive golden fixture with valid canonical Swift UUIDs", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_comprehensive_golden_workspace.json");
+    const doc = parseWorkspaceDocument(goldenFixture.default);
+
+    const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+    // 1. Root Payload ID
+    expect(doc.payload.id).toMatch(UUID_REGEX);
+
+    // 2. All Nodes IDs & Content IDs
+    expect(doc.payload.nodes).toHaveLength(12);
+    for (const node of doc.payload.nodes) {
+      expect(node.id).toMatch(UUID_REGEX);
+      if ("terminal" in node.content) {
+        expect(node.content.terminal._0.id).toMatch(UUID_REGEX);
+        if (node.content.terminal._0.assignedRoleId) {
+          expect(node.content.terminal._0.assignedRoleId).toMatch(UUID_REGEX);
+        }
+      } else if ("portal" in node.content) {
+        expect(node.content.portal._0.id).toMatch(UUID_REGEX);
+      }
+    }
+
+    // 3. Connection IDs & Reference IDs
+    for (const conn of doc.payload.connections) {
+      expect(conn.id).toMatch(UUID_REGEX);
+      expect(conn.terminalIdA).toMatch(UUID_REGEX);
+      expect(conn.terminalIdB).toMatch(UUID_REGEX);
+    }
+    for (const conn of doc.payload.noteConnections) {
+      expect(conn.id).toMatch(UUID_REGEX);
+      expect(conn.terminalId).toMatch(UUID_REGEX);
+      expect(conn.noteNodeId).toMatch(UUID_REGEX);
+    }
+    for (const conn of doc.payload.portalConnections) {
+      expect(conn.id).toMatch(UUID_REGEX);
+      expect(conn.terminalId).toMatch(UUID_REGEX);
+      expect(conn.portalNodeId).toMatch(UUID_REGEX);
+    }
+    for (const conn of doc.payload.portalToPortalConnections) {
+      expect(conn.id).toMatch(UUID_REGEX);
+      expect(conn.portalIdA).toMatch(UUID_REGEX);
+      expect(conn.portalIdB).toMatch(UUID_REGEX);
+    }
+    for (const conn of doc.payload.noteToNoteConnections) {
+      expect(conn.id).toMatch(UUID_REGEX);
+      expect(conn.noteNodeIdA).toMatch(UUID_REGEX);
+      expect(conn.noteNodeIdB).toMatch(UUID_REGEX);
+    }
+    for (const conn of doc.payload.crossFloorConnections) {
+      expect(conn.id).toMatch(UUID_REGEX);
+      expect(conn.nodeIdA).toMatch(UUID_REGEX);
+      expect(conn.nodeIdB).toMatch(UUID_REGEX);
+      if (conn.floorIdB) expect(conn.floorIdB).toMatch(UUID_REGEX);
+    }
+
+    // 4. Floors & Drawings IDs
+    for (const floor of doc.payload.floors) {
+      expect(floor.id).toMatch(UUID_REGEX);
+    }
+    for (const drawing of doc.payload.drawings) {
+      expect(drawing.id).toMatch(UUID_REGEX);
+    }
+  });
+
+  it("parses macOS v2 comprehensive golden fixture with all 8 node types, 6 connection types, floors, drawings, and unknown fields", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_comprehensive_golden_workspace.json");
     const doc = parseWorkspaceDocument(goldenFixture.default);
 
     expect(doc.schemaVersion).toBe(2);
@@ -138,8 +212,8 @@ describe("Workspace Model & Persistence Schema", () => {
     expect((doc.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
   });
 
-  it("performs complete Mac -> Windows -> Mac JSON round-trip on golden fixture without data loss", async () => {
-    const goldenFixture = await import("../../tests/fixtures/macOS_v2_golden_workspace.json");
+  it("performs complete Mac -> Windows -> Mac JSON round-trip on comprehensive golden fixture without data loss", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_comprehensive_golden_workspace.json");
     const originalDoc = parseWorkspaceDocument(goldenFixture.default);
     const serializedJson = JSON.stringify(originalDoc);
     const reParsedDoc = parseWorkspaceDocument(JSON.parse(serializedJson));
@@ -147,4 +221,5 @@ describe("Workspace Model & Persistence Schema", () => {
     expect(reParsedDoc).toEqual(originalDoc);
   });
 });
+
 
