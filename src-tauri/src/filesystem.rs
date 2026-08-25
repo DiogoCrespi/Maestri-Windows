@@ -60,8 +60,7 @@ pub fn list_directory(
         )
     })?;
 
-    let mut entries = Vec::new();
-    let mut is_truncated = false;
+    let mut all_entries = Vec::new();
 
     for item in read_dir {
         let entry = match item {
@@ -74,11 +73,6 @@ pub fn list_directory(
 
         if !show_hidden && is_hidden_file(&name, &file_path) {
             continue;
-        }
-
-        if entries.len() >= limit {
-            is_truncated = true;
-            break;
         }
 
         let metadata = entry.metadata().ok();
@@ -95,7 +89,7 @@ pub fn list_directory(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as u64);
 
-        entries.push(FileEntry {
+        all_entries.push(FileEntry {
             name,
             path: file_path.to_string_lossy().to_string(),
             is_dir,
@@ -106,15 +100,21 @@ pub fn list_directory(
         });
     }
 
-    // Ordenar diretórios primeiro, depois arquivos alfabeticamente (ordenação determinística)
-    entries.sort_by(|a, b| {
+    // Ordenação determinística antes da limitação
+    all_entries.sort_by(|a, b| {
         b.is_dir
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             .then_with(|| a.name.cmp(&b.name))
     });
 
-    let total_entries = entries.len();
+    let total_entries = all_entries.len();
+    let is_truncated = total_entries > limit;
+    let entries = if is_truncated {
+        all_entries.into_iter().take(limit).collect()
+    } else {
+        all_entries
+    };
 
     Ok(DirectoryListing {
         path: target_path.to_string_lossy().to_string(),
@@ -225,5 +225,25 @@ mod tests {
         let listing = list_directory(dir.path().to_string_lossy().to_string(), None, None).unwrap();
         let names: Vec<String> = listing.entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(names, vec!["a_folder", "Z_folder", "a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn test_list_directory_deterministic_truncation_subset() {
+        let dir = tempdir().unwrap();
+        // Cria 10 arquivos com nomes de z a a
+        for c in ('a'..='j').rev() {
+            File::create(dir.path().join(format!("{}.txt", c))).unwrap();
+        }
+        // Cria 2 pastas
+        fs::create_dir(dir.path().join("folder_b")).unwrap();
+        fs::create_dir(dir.path().join("folder_a")).unwrap();
+
+        // Limite = 4
+        let listing = list_directory(dir.path().to_string_lossy().to_string(), Some(4), None).unwrap();
+        assert_eq!(listing.total_entries, 12);
+        assert!(listing.is_truncated);
+        let names: Vec<String> = listing.entries.iter().map(|e| e.name.clone()).collect();
+        // As 2 pastas primeiras + os 2 primeiros arquivos em ordem alfabética ('a.txt' e 'b.txt')
+        assert_eq!(names, vec!["folder_a", "folder_b", "a.txt", "b.txt"]);
     }
 }

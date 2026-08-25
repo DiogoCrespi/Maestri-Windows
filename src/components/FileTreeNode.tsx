@@ -32,6 +32,28 @@ export interface FileTreeNodeData {
   [key: string]: unknown;
 }
 
+export function toggleViewMode(currentMode: "list" | "grid"): "list" | "grid" {
+  return currentMode === "list" ? "grid" : "list";
+}
+
+export function toggleShowHidden(currentShowHidden: boolean): boolean {
+  return !currentShowHidden;
+}
+
+export function prepareFileDragData(
+  event: Pick<React.DragEvent, "preventDefault" | "dataTransfer">,
+  entry: FileEntryPayload
+): boolean {
+  if (!entry.isFile) {
+    event.preventDefault();
+    return false;
+  }
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData("application/x-maestri-file", entry.path);
+  event.dataTransfer.setData("text/plain", entry.path);
+  return true;
+}
+
 export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const nodeData = data as unknown as FileTreeNodeData;
   const initialRootPath =
@@ -57,7 +79,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   }, [initialRootPath]);
 
   const handleToggleViewMode = () => {
-    const nextMode: "list" | "grid" = viewMode === "list" ? "grid" : "list";
+    const nextMode = toggleViewMode(viewMode);
     const store = useWorkspaceStore.getState();
     const updatedNodes = store.nodes.map((node) => {
       if (node.id !== id) return node;
@@ -78,7 +100,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   };
 
   const handleToggleShowHidden = () => {
-    setShowHidden((prev) => !prev);
+    setShowHidden((prev) => toggleShowHidden(prev));
   };
 
   const fetchDirectory = useCallback(async (dirPath: string) => {
@@ -138,13 +160,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   };
 
   const handleDragStart = (event: React.DragEvent, entry: FileEntryPayload) => {
-    if (!entry.isFile) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.setData("application/x-maestri-file", entry.path);
-    event.dataTransfer.setData("text/plain", entry.path);
+    prepareFileDragData(event, entry);
   };
 
   return (

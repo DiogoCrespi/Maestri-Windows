@@ -1,85 +1,109 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FileTreeNodeData, FileEntryPayload } from "./FileTreeNode";
-import type { FileTreeContent } from "../model/workspace";
+import {
+  toggleViewMode,
+  toggleShowHidden,
+  prepareFileDragData,
+  FileEntryPayload,
+} from "./FileTreeNode";
+import { useWorkspaceStore } from "../store/workspaceStore";
 
-describe("FileTreeNode logic & UI contract tests", () => {
-  it("determines default view mode as list when undefined", () => {
-    const data: FileTreeNodeData = {
-      content: {
-        name: "Test Explorer",
-        rootPath: "C:\\Workspace",
-        viewMode: "list",
-      },
-    };
-    expect(data.content?.viewMode ?? "list").toBe("list");
+describe("FileTreeNode helpers and workspace store integration", () => {
+  it("toggleViewMode correctly toggles between list and grid", () => {
+    expect(toggleViewMode("list")).toBe("grid");
+    expect(toggleViewMode("grid")).toBe("list");
   });
 
-  it("toggles viewMode from list to grid", () => {
-    const initialContent: FileTreeContent = {
-      name: "Explorer",
-      rootPath: "C:\\Projects",
-      viewMode: "list",
-    };
-
-    const nextViewMode = initialContent.viewMode === "list" ? "grid" : "list";
-    expect(nextViewMode).toBe("grid");
+  it("toggleShowHidden correctly toggles boolean state", () => {
+    expect(toggleShowHidden(false)).toBe(true);
+    expect(toggleShowHidden(true)).toBe(false);
   });
 
-  it("preserves file drag data format (application/x-maestri-file and text/plain)", () => {
+  it("prepareFileDragData sets payload for files and returns true", () => {
     const entry: FileEntryPayload = {
-      name: "document.txt",
-      path: "C:\\Workspace\\document.txt",
+      name: "report.pdf",
+      path: "C:\\Docs\\report.pdf",
       isDir: false,
       isFile: true,
       isSymlink: false,
-      size: 1024,
+      size: 2048,
     };
+    const setData = vi.fn();
+    const preventDefault = vi.fn();
+    const mockEvent = { setData, preventDefault, dataTransfer: { effectAllowed: "", setData } } as unknown as React.DragEvent;
 
-    const setDataMock = vi.fn();
-    const mockEvent = {
-      preventDefault: vi.fn(),
-      dataTransfer: {
-        effectAllowed: "",
-        setData: setDataMock,
-      },
-    } as unknown as React.DragEvent;
+    const result = prepareFileDragData(mockEvent, entry);
 
-    if (!entry.isFile) {
-      mockEvent.preventDefault();
-    } else {
-      mockEvent.dataTransfer.effectAllowed = "copy";
-      mockEvent.dataTransfer.setData("application/x-maestri-file", entry.path);
-      mockEvent.dataTransfer.setData("text/plain", entry.path);
-    }
-
+    expect(result).toBe(true);
     expect(mockEvent.dataTransfer.effectAllowed).toBe("copy");
-    expect(setDataMock).toHaveBeenCalledWith("application/x-maestri-file", "C:\\Workspace\\document.txt");
-    expect(setDataMock).toHaveBeenCalledWith("text/plain", "C:\\Workspace\\document.txt");
+    expect(setData).toHaveBeenCalledWith("application/x-maestri-file", "C:\\Docs\\report.pdf");
+    expect(setData).toHaveBeenCalledWith("text/plain", "C:\\Docs\\report.pdf");
+    expect(preventDefault).not.toHaveBeenCalled();
   });
 
-  it("prevents dragging for directories", () => {
-    const dirEntry: FileEntryPayload = {
+  it("prepareFileDragData prevents default for directories and returns false", () => {
+    const entry: FileEntryPayload = {
       name: "src",
-      path: "C:\\Workspace\\src",
+      path: "C:\\Projects\\src",
       isDir: true,
       isFile: false,
       isSymlink: false,
       size: 0,
     };
+    const setData = vi.fn();
+    const preventDefault = vi.fn();
+    const mockEvent = { setData, preventDefault } as unknown as React.DragEvent;
 
-    const preventDefaultMock = vi.fn();
-    const mockEvent = {
-      preventDefault: preventDefaultMock,
-      dataTransfer: {
-        effectAllowed: "",
-        setData: vi.fn(),
+    const result = prepareFileDragData(mockEvent, entry);
+
+    expect(result).toBe(false);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(setData).not.toHaveBeenCalled();
+  });
+
+  it("updates viewMode in workspace store and marks store as dirty when toggled", () => {
+    const store = useWorkspaceStore.getState();
+    const initialNode = {
+      id: "filetree-node-1",
+      type: "fileTree",
+      position: { x: 100, y: 100 },
+      data: {
+        contentVariant: "fileTree",
+        content: {
+          name: "File Explorer",
+          rootPath: "C:\\Repo",
+          viewMode: "list",
+        },
       },
-    } as unknown as React.DragEvent;
+    };
 
-    if (!dirEntry.isFile) {
-      mockEvent.preventDefault();
-    }
+    store.setNodes([initialNode], { dirty: false });
+    store.markClean();
+    expect(useWorkspaceStore.getState().isDirty).toBe(false);
 
-    expect(preventDefaultMock).toHaveBeenCalled();
+    // Simula a ação do handleToggleViewMode
+    const nextMode = toggleViewMode("list");
+    const currentNodes = useWorkspaceStore.getState().nodes;
+    const updatedNodes = currentNodes.map((n) => {
+      if (n.id !== "filetree-node-1") return n;
+      const data = (n.data || {}) as Record<string, unknown>;
+      const content = (data.content || {}) as Record<string, unknown>;
+      return {
+        ...n,
+        data: {
+          ...data,
+          content: {
+            ...content,
+            viewMode: nextMode,
+          },
+        },
+      };
+    });
+
+    useWorkspaceStore.getState().setNodes(updatedNodes, { dirty: true });
+
+    const stateAfterUpdate = useWorkspaceStore.getState();
+    expect(stateAfterUpdate.isDirty).toBe(true);
+    const updatedNode = stateAfterUpdate.nodes.find((n) => n.id === "filetree-node-1");
+    expect((updatedNode?.data.content as Record<string, unknown>).viewMode).toBe("grid");
   });
 });
