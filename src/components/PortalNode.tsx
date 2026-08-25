@@ -48,7 +48,7 @@ export function validateFrontendStorageScope(rawScope: string): StorageScopeVali
   };
 }
 
-function sanitizeUrl(rawUrl: string): string {
+export function sanitizeUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (!trimmed) return "about:blank";
   if (/^https?:\/\//i.test(trimmed) || /^about:blank$/i.test(trimmed)) {
@@ -57,72 +57,29 @@ function sanitizeUrl(rawUrl: string): string {
   return `https://${trimmed}`;
 }
 
-export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
-  const nodeData = data as unknown as PortalNodeData;
-  const content = nodeData?.content;
-
-  const rawStorageScope = content?.storageScope ?? "isolated";
+export function usePortalLifecycle({
+  portalId,
+  portalName,
+  initialUrl,
+  rawStorageScope,
+  isNative,
+}: {
+  portalId: string;
+  portalName: string;
+  initialUrl: string;
+  rawStorageScope: string;
+  isNative: boolean;
+}) {
   const validation = useMemo(() => validateFrontendStorageScope(rawStorageScope), [rawStorageScope]);
 
   const isScopeValid = validation.isValid;
   const validatedScope = validation.scope;
   const scopeErrorMessage = validation.errorMessage;
-  const incognitoOption = validation.webviewOptions?.incognito;
 
-  const initialUrl = (
-    content?.currentURL ??
-    (typeof content?.source === "object" && content?.source && "url" in content.source
-      ? content.source.url._0
-      : undefined) ??
-    nodeData?.url ??
-    "https://example.com"
-  ).trim();
-
-  const [inputUrl, setInputUrl] = useState(initialUrl);
-  const [activeUrl, setActiveUrl] = useState(() => sanitizeUrl(initialUrl));
-  const [history, setHistory] = useState<string[]>([sanitizeUrl(initialUrl)]);
-  const [historyIndex, setHistoryIndex] = useState(0);
   const [hasError, setHasError] = useState(!isScopeValid);
   const [errorMessage, setErrorMessage] = useState<string | null>(scopeErrorMessage ?? null);
+  const initialUrlSanitizedRef = useRef(sanitizeUrl(initialUrl));
 
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const portalBodyRef = useRef<HTMLDivElement | null>(null);
-  const nativeWebviewRef = useRef<Webview | null>(null);
-  const nativeInitialUrlRef = useRef(sanitizeUrl(initialUrl));
-  const lastRequestedUrlRef = useRef(sanitizeUrl(initialUrl));
-  const isNative = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
-  // The canvas node UUID is the single native identity for this Portal. It is
-  // also the access-graph ID and the WebView2 label; content.id is not used for
-  // addressing because it is a separate persisted content identifier.
-  const portalId = id;
-  const portalName = content?.name ?? nodeData?.name ?? "Portal";
-  const nativeLabel = `portal:${portalId}`;
-
-  useEffect(() => {
-    const sanitized = sanitizeUrl(initialUrl);
-    setInputUrl(initialUrl);
-    setActiveUrl(sanitized);
-    setHistory([sanitized]);
-    setHistoryIndex(0);
-    if (isScopeValid) {
-      setHasError(false);
-      setErrorMessage(null);
-    }
-
-    // A URL update coming from the canvas may be external to this node. Keep
-    // the existing WebView2 and ask the registry to navigate it in place.
-    if (isNative && isScopeValid && sanitized !== lastRequestedUrlRef.current) {
-      lastRequestedUrlRef.current = sanitized;
-      void desktopBridge.portalNavigate(portalId, sanitized).catch((error: unknown) => {
-        console.error(`Falha ao sincronizar URL do Portal ${portalId}`, error);
-        setHasError(true);
-      });
-    }
-  }, [initialUrl, isNative, portalId, isScopeValid]);
-
-  // Register before commands can be issued and always pair registration with
-  // an unregister. Waiting on the registration promise makes cleanup safe if
-  // the node unmounts while the native command is still in flight.
   useEffect(() => {
     if (!isNative) return;
     if (!isScopeValid) {
@@ -135,7 +92,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
     const registration = desktopBridge.portalRegister(
       portalId,
       portalName,
-      sanitizeUrl(initialUrl),
+      initialUrlSanitizedRef.current,
       validatedScope,
     );
 
@@ -143,12 +100,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
       .then(async () => {
         if (cancelled) return;
         try {
-          const inspected = await desktopBridge.portalInspect(portalId);
-          if (cancelled || inspected.currentUrl === activeUrl) return;
-          setInputUrl(inspected.currentUrl);
-          setActiveUrl(inspected.currentUrl);
-          setHistory([inspected.currentUrl]);
-          setHistoryIndex(0);
+          await desktopBridge.portalInspect(portalId);
         } catch (error) {
           console.error(`Falha ao inspecionar Portal ${portalId}`, error);
         }
@@ -167,13 +119,93 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         .then(() => desktopBridge.portalUnregister(portalId))
         .catch(() => undefined);
     };
-  }, [isNative, portalId, portalName, initialUrl, rawStorageScope, isScopeValid, validatedScope, scopeErrorMessage, activeUrl]);
+  }, [isNative, portalId, portalName, isScopeValid, validatedScope, scopeErrorMessage, rawStorageScope]);
 
+  return {
+    validation,
+    isScopeValid,
+    validatedScope,
+    hasError,
+    setHasError,
+    errorMessage,
+    setErrorMessage,
+  };
+}
+
+export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
+  const nodeData = data as unknown as PortalNodeData;
+  const content = nodeData?.content;
+
+  const rawStorageScope = content?.storageScope ?? "isolated";
+  const initialUrl = (
+    content?.currentURL ??
+    (typeof content?.source === "object" && content?.source && "url" in content.source
+      ? content.source.url._0
+      : undefined) ??
+    nodeData?.url ??
+    "https://example.com"
+  ).trim();
+
+  const isNative = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
+  const portalId = id;
+  const portalName = content?.name ?? nodeData?.name ?? "Portal";
+  const nativeLabel = `portal:${portalId}`;
+
+  const {
+    validation,
+    isScopeValid,
+    validatedScope,
+    hasError,
+    setHasError,
+    errorMessage,
+    setErrorMessage,
+  } = usePortalLifecycle({
+    portalId,
+    portalName,
+    initialUrl,
+    rawStorageScope,
+    isNative,
+  });
+
+  const incognitoOption = validation.webviewOptions?.incognito;
+
+  const [inputUrl, setInputUrl] = useState(initialUrl);
+  const [activeUrl, setActiveUrl] = useState(() => sanitizeUrl(initialUrl));
+  const [history, setHistory] = useState<string[]>([sanitizeUrl(initialUrl)]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const portalBodyRef = useRef<HTMLDivElement | null>(null);
+  const nativeWebviewRef = useRef<Webview | null>(null);
+  const lastRequestedUrlRef = useRef(sanitizeUrl(initialUrl));
+
+  // 1. Synchronize external URL updates coming from canvas props to native webview.
+  useEffect(() => {
+    const sanitized = sanitizeUrl(initialUrl);
+    setInputUrl(initialUrl);
+    setActiveUrl(sanitized);
+    setHistory([sanitized]);
+    setHistoryIndex(0);
+    if (isScopeValid) {
+      setHasError(false);
+      setErrorMessage(null);
+    }
+
+    if (isNative && isScopeValid && sanitized !== lastRequestedUrlRef.current) {
+      lastRequestedUrlRef.current = sanitized;
+      void desktopBridge.portalNavigate(portalId, sanitized).catch((error: unknown) => {
+        console.error(`Falha ao sincronizar URL do Portal ${portalId}`, error);
+        setHasError(true);
+      });
+    }
+  }, [initialUrl, isNative, portalId, isScopeValid, setHasError, setErrorMessage]);
+
+  // 2. Native Webview2 View Instance Effect
   useEffect(() => {
     if (!isNative || !portalBodyRef.current) return;
     if (!isScopeValid) {
       setHasError(true);
-      setErrorMessage(scopeErrorMessage || `Escopo não suportado: "${rawStorageScope}"`);
+      setErrorMessage(validation.errorMessage || `Escopo não suportado: "${rawStorageScope}"`);
       return;
     }
 
@@ -187,7 +219,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         if (cancelled || !portalBodyRef.current) return;
         const rect = portalBodyRef.current.getBoundingClientRect();
         candidate = new Webview(getCurrentWindow(), nativeLabel, {
-          url: nativeInitialUrlRef.current,
+          url: sanitizeUrl(initialUrl),
           x: Math.max(0, rect.left),
           y: Math.max(0, rect.top),
           width: Math.max(1, rect.width),
@@ -221,8 +253,9 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         void candidate.close().catch(() => undefined);
       }
     };
-  }, [isNative, nativeLabel, rawStorageScope, isScopeValid, scopeErrorMessage, incognitoOption]);
+  }, [isNative, nativeLabel, isScopeValid, rawStorageScope, validation.errorMessage, incognitoOption, initialUrl, setHasError, setErrorMessage]);
 
+  // 3. Bounds Sync Effect
   useEffect(() => {
     if (!isNative || !isScopeValid) return;
     let animationFrame = 0;
