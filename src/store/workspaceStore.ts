@@ -135,6 +135,8 @@ export function reactFlowNodeToCanvasNode(rfNode: ReactFlowNode): CanvasNode {
     },
   } as NodeContent;
 
+  const now = new Date().toISOString();
+
   return {
     ...rawNode,
     id: rfNode.id,
@@ -142,8 +144,8 @@ export function reactFlowNodeToCanvasNode(rfNode: ReactFlowNode): CanvasNode {
     content: finalContent,
     zIndex: rfNode.zIndex ?? (rawNode.zIndex as number | undefined) ?? 0,
     isLocked: data.isLocked === true,
-    createdAt: typeof data.createdAt === "string" ? data.createdAt : (rawNode.createdAt as string | undefined) ?? new Date().toISOString(),
-    lastModifiedAt: (rawNode.lastModifiedAt as string | undefined) ?? new Date().toISOString(),
+    createdAt: typeof data.createdAt === "string" ? data.createdAt : (rawNode.createdAt as string | undefined) ?? now,
+    lastModifiedAt: now,
   } as CanvasNode;
 }
 

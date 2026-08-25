@@ -240,7 +240,7 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(state.serializeWorkspace().payload.canvasZoom).toBe(1.35);
   });
 
-  it("loads comprehensive golden fixture into workspaceStore, converts all 12 nodes & 6 connection types, and serializes back with 100% data preservation", async () => {
+  it("loads comprehensive golden fixture into workspaceStore, updates node position, refreshes lastModifiedAt timestamp on edit, and serializes back with 100% unknown field preservation", async () => {
     const goldenFixture = await import("../../tests/fixtures/macOS_v2_comprehensive_golden_workspace.json");
     const store = useWorkspaceStore.getState();
 
@@ -252,7 +252,9 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(loadedState.edges).toHaveLength(5);
     expect(loadedState.isDirty).toBe(false);
 
-    // Modify a node position (simulating user dragging a node)
+    const oldLastModifiedAt = "2026-05-16T10:25:00.000Z";
+
+    // Modify a node position (simulating user dragging a node on Windows canvas)
     store.updateNodePosition("20000000-0000-0000-0000-000000000001", { x: 250.5, y: 350.5 });
     expect(useWorkspaceStore.getState().isDirty).toBe(true);
 
@@ -267,10 +269,14 @@ describe("workspaceStore & React Flow Conversions", () => {
       experimentalFlag: true,
     });
 
-    // Validate node unknown field & updated position
+    // Validate node unknown field, updated position, and REFRESHED lastModifiedAt (not keeping old timestamp!)
     const serializedTermNode = serialized.payload.nodes.find((n) => n.id === "20000000-0000-0000-0000-000000000001");
     expect(serializedTermNode).toBeDefined();
     expect(serializedTermNode?.frame).toEqual([[250.5, 350.5], [600, 400]]);
+    expect(serializedTermNode?.createdAt).toBe("2026-05-16T10:20:30.123Z");
+    expect(serializedTermNode?.lastModifiedAt).not.toBe(oldLastModifiedAt);
+    expect(new Date(serializedTermNode!.lastModifiedAt).getTime()).toBeGreaterThan(new Date(oldLastModifiedAt).getTime());
+
     expect((serializedTermNode as unknown as Record<string, unknown>).customNodeMeta).toBe("term-node-attr");
     if (serializedTermNode && "terminal" in serializedTermNode.content) {
       expect((serializedTermNode.content.terminal._0 as unknown as Record<string, unknown>).customTerminalField).toBe("agent-extra");

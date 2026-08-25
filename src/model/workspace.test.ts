@@ -212,7 +212,7 @@ describe("Workspace Model & Persistence Schema", () => {
     expect((doc.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
   });
 
-  it("performs complete Mac -> Windows -> Mac JSON round-trip on comprehensive golden fixture without data loss", async () => {
+  it("performs complete TypeScript parse and JSON round-trip on comprehensive golden fixture without data loss", async () => {
     const goldenFixture = await import("../../tests/fixtures/macOS_v2_comprehensive_golden_workspace.json");
     const originalDoc = parseWorkspaceDocument(goldenFixture.default);
     const serializedJson = JSON.stringify(originalDoc);
