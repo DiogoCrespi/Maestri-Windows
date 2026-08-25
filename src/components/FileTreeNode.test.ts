@@ -3,11 +3,12 @@ import {
   toggleViewMode,
   toggleShowHidden,
   prepareFileDragData,
+  updateFileTreeNodeViewMode,
   FileEntryPayload,
 } from "./FileTreeNode";
 import { useWorkspaceStore } from "../store/workspaceStore";
 
-describe("FileTreeNode helpers and workspace store integration", () => {
+describe("FileTreeNode exported helpers and workspace store integration", () => {
   it("toggleViewMode correctly toggles between list and grid", () => {
     expect(toggleViewMode("list")).toBe("grid");
     expect(toggleViewMode("grid")).toBe("list");
@@ -60,10 +61,10 @@ describe("FileTreeNode helpers and workspace store integration", () => {
     expect(setData).not.toHaveBeenCalled();
   });
 
-  it("updates viewMode in workspace store and marks store as dirty when toggled", () => {
+  it("updateFileTreeNodeViewMode calls store directly, updates viewMode and marks store dirty", () => {
     const store = useWorkspaceStore.getState();
     const initialNode = {
-      id: "filetree-node-1",
+      id: "filetree-node-real-1",
       type: "fileTree",
       position: { x: 100, y: 100 },
       data: {
@@ -80,30 +81,19 @@ describe("FileTreeNode helpers and workspace store integration", () => {
     store.markClean();
     expect(useWorkspaceStore.getState().isDirty).toBe(false);
 
-    // Simula a ação do handleToggleViewMode
-    const nextMode = toggleViewMode("list");
-    const currentNodes = useWorkspaceStore.getState().nodes;
-    const updatedNodes = currentNodes.map((n) => {
-      if (n.id !== "filetree-node-1") return n;
-      const data = (n.data || {}) as Record<string, unknown>;
-      const content = (data.content || {}) as Record<string, unknown>;
-      return {
-        ...n,
-        data: {
-          ...data,
-          content: {
-            ...content,
-            viewMode: nextMode,
-          },
-        },
-      };
-    });
-
-    useWorkspaceStore.getState().setNodes(updatedNodes, { dirty: true });
+    // Executa diretamente a função exportada do componente que lida com o evento
+    const nextMode = updateFileTreeNodeViewMode("filetree-node-real-1", "list");
+    expect(nextMode).toBe("grid");
 
     const stateAfterUpdate = useWorkspaceStore.getState();
     expect(stateAfterUpdate.isDirty).toBe(true);
-    const updatedNode = stateAfterUpdate.nodes.find((n) => n.id === "filetree-node-1");
+    const updatedNode = stateAfterUpdate.nodes.find((n) => n.id === "filetree-node-real-1");
     expect((updatedNode?.data.content as Record<string, unknown>).viewMode).toBe("grid");
+
+    // Executa alternância reversa (grid -> list)
+    const reversedMode = updateFileTreeNodeViewMode("filetree-node-real-1", "grid");
+    expect(reversedMode).toBe("list");
+    const nodeAfterReverse = useWorkspaceStore.getState().nodes.find((n) => n.id === "filetree-node-real-1");
+    expect((nodeAfterReverse?.data.content as Record<string, unknown>).viewMode).toBe("list");
   });
 });

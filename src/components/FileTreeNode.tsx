@@ -54,6 +54,28 @@ export function prepareFileDragData(
   return true;
 }
 
+export function updateFileTreeNodeViewMode(nodeId: string, currentViewMode: "list" | "grid"): "list" | "grid" {
+  const nextMode = toggleViewMode(currentViewMode);
+  const store = useWorkspaceStore.getState();
+  const updatedNodes = store.nodes.map((node) => {
+    if (node.id !== nodeId) return node;
+    const currentData = (node.data || {}) as Record<string, unknown>;
+    const existingContent = (currentData.content || {}) as Record<string, unknown>;
+    return {
+      ...node,
+      data: {
+        ...currentData,
+        content: {
+          ...existingContent,
+          viewMode: nextMode,
+        },
+      },
+    };
+  });
+  store.setNodes(updatedNodes, { dirty: true });
+  return nextMode;
+}
+
 export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const nodeData = data as unknown as FileTreeNodeData;
   const initialRootPath =
@@ -79,24 +101,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   }, [initialRootPath]);
 
   const handleToggleViewMode = () => {
-    const nextMode = toggleViewMode(viewMode);
-    const store = useWorkspaceStore.getState();
-    const updatedNodes = store.nodes.map((node) => {
-      if (node.id !== id) return node;
-      const currentData = (node.data || {}) as Record<string, unknown>;
-      const existingContent = (currentData.content || {}) as Record<string, unknown>;
-      return {
-        ...node,
-        data: {
-          ...currentData,
-          content: {
-            ...existingContent,
-            viewMode: nextMode,
-          },
-        },
-      };
-    });
-    store.setNodes(updatedNodes, { dirty: true });
+    updateFileTreeNodeViewMode(id, viewMode);
   };
 
   const handleToggleShowHidden = () => {
