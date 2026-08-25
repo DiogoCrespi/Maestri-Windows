@@ -84,6 +84,31 @@
   border-color: #3b82f6;
 }
 
+.portal-scope-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: #27272a;
+  color: #a1a1aa;
+  border: 1px solid #3f3f46;
+  white-space: nowrap;
+}
+
+.portal-scope-badge.isolated {
+  color: #38bdf8;
+  border-color: #0284c7;
+}
+
+.portal-scope-badge.shared {
+  color: #a855f7;
+  border-color: #7e22ce;
+}
+
+.portal-scope-badge.invalid {
+  color: #f87171;
+  border-color: #dc2626;
+}
+
 .portal-body {
   flex: 1;
   width: 100%;

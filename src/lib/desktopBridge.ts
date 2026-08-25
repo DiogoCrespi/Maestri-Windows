@@ -35,6 +35,7 @@ export interface PortalInfo {
   currentUrl: string;
   title: string | null;
   isLoading: boolean;
+  storageScope?: string;
 }
 
 export interface DesktopBridge {
@@ -68,7 +69,7 @@ export interface DesktopBridge {
     nodes: Array<{ id: string; name: string; nodeType?: string; resourcePath?: string | null }>,
     connections: Array<{ a: string; b: string }>,
   ) => Promise<number>;
-  portalRegister: (id: string, name: string, initialUrl: string) => Promise<PortalInfo>;
+  portalRegister: (id: string, name: string, initialUrl: string, storageScope?: string) => Promise<PortalInfo>;
   portalUnregister: (id: string) => Promise<boolean>;
   portalNavigate: (id: string, url: string) => Promise<PortalInfo>;
   portalReload: (id: string) => Promise<PortalInfo>;
@@ -287,9 +288,10 @@ export const desktopBridge: DesktopBridge = {
     return invoke<number>("access_graph_replace", { nodes, connections });
   },
 
-  async portalRegister(id, name, initialUrl) {
-    if (!isNative) return { id, name, currentUrl: initialUrl, title: null, isLoading: false };
-    return invoke<PortalInfo>("portal_register", { id, name, initialUrl });
+  async portalRegister(id, name, initialUrl, storageScope) {
+    const scope = storageScope ?? "isolated";
+    if (!isNative) return { id, name, currentUrl: initialUrl, title: null, isLoading: false, storageScope: scope };
+    return invoke<PortalInfo>("portal_register", { id, name, initialUrl, storageScope: scope });
   },
 
   async portalUnregister(id) {

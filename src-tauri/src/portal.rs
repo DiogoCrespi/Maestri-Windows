@@ -16,6 +16,7 @@ pub struct PortalInfo {
     pub current_url: String,
     pub title: Option<String>,
     pub is_loading: bool,
+    pub storage_scope: String,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +28,7 @@ pub struct PortalSession {
     pub history: Vec<String>,
     pub history_index: usize,
     pub is_loading: bool,
+    pub storage_scope: String,
 }
 
 /// The React Flow canvas node UUID is the native Portal identity. The same
@@ -35,10 +37,34 @@ pub fn portal_webview_label(id: &str) -> String {
     format!("portal:{id}")
 }
 
+pub fn validate_storage_scope(scope: &str) -> Result<String, String> {
+    let trimmed = scope.trim();
+    if trimmed.is_empty() || trimmed == "isolated" {
+        Ok("isolated".to_string())
+    } else if trimmed == "shared" {
+        Err("Unsupported storageScope: 'shared' requires an explicit shared group ID (e.g., 'shared:group_id')".to_string())
+    } else if trimmed.starts_with("shared:") {
+        let group_id = trimmed.trim_start_matches("shared:").trim();
+        if group_id.is_empty() {
+            Err("Unsupported storageScope: shared group ID cannot be empty".to_string())
+        } else {
+            Ok(format!("shared:{group_id}"))
+        }
+    } else {
+        Err(format!("Unsupported storageScope: '{trimmed}'"))
+    }
+}
+
 impl PortalSession {
-    pub fn new(id: String, name: String, initial_url: String) -> Self {
+    pub fn new(
+        id: String,
+        name: String,
+        initial_url: String,
+        storage_scope: String,
+    ) -> Result<Self, String> {
+        let validated_scope = validate_storage_scope(&storage_scope)?;
         let sanitized = sanitize_url(&initial_url);
-        Self {
+        Ok(Self {
             id,
             name,
             current_url: sanitized.clone(),
@@ -46,7 +72,8 @@ impl PortalSession {
             history: vec![sanitized],
             history_index: 0,
             is_loading: false,
-        }
+            storage_scope: validated_scope,
+        })
     }
 
     pub fn to_info(&self) -> PortalInfo {
@@ -56,6 +83,7 @@ impl PortalSession {
             current_url: self.current_url.clone(),
             title: self.title.clone(),
             is_loading: self.is_loading,
+            storage_scope: self.storage_scope.clone(),
         }
     }
 
@@ -125,13 +153,21 @@ impl PortalRegistry {
         Self::default()
     }
 
-    pub fn register(&self, id: String, name: String, initial_url: String) -> PortalInfo {
-        let session = PortalSession::new(id.clone(), name, initial_url);
+    pub fn register(
+        &self,
+        id: String,
+        name: String,
+        initial_url: String,
+        storage_scope: String,
+    ) -> Result<PortalInfo, String> {
+        let session = PortalSession::new(id.clone(), name, initial_url, storage_scope)?;
         let info = session.to_info();
         if let Ok(mut lock) = self.sessions.write() {
             lock.insert(id, session);
+            Ok(info)
+        } else {
+            Err("Registry lock poisoned".to_string())
         }
-        info
     }
 
     pub fn unregister(&self, id: &str) -> bool {
@@ -182,11 +218,13 @@ pub fn portal_register(
     id: String,
     name: String,
     initial_url: String,
+    storage_scope: Option<String>,
 ) -> Result<PortalInfo, String> {
     if id.trim().is_empty() {
         return Err("Portal ID cannot be empty".to_string());
     }
-    Ok(registry.register(id, name, initial_url))
+    let scope = storage_scope.unwrap_or_else(|| "isolated".to_string());
+    registry.register(id, name, initial_url, scope)
 }
 
 #[tauri::command]
@@ -353,15 +391,35 @@ mod tests {
     }
 
     #[test]
+    fn storage_scope_validation_isolated_and_shared() {
+        assert_eq!(validate_storage_scope("isolated").unwrap(), "isolated");
+        assert_eq!(validate_storage_scope("").unwrap(), "isolated");
+        assert_eq!(validate_storage_scope("  ").unwrap(), "isolated");
+
+        assert_eq!(validate_storage_scope("shared:group_123").unwrap(), "shared:group_123");
+
+        let err_plain_shared = validate_storage_scope("shared").unwrap_err();
+        assert!(err_plain_shared.contains("requires an explicit shared group ID"));
+
+        let err_empty_group = validate_storage_scope("shared:  ").unwrap_err();
+        assert!(err_empty_group.contains("shared group ID cannot be empty"));
+
+        let err_unsupported = validate_storage_scope("workspace").unwrap_err();
+        assert!(err_unsupported.contains("Unsupported storageScope: 'workspace'"));
+    }
+
+    #[test]
     fn portal_session_history_navigation() {
         let mut session = PortalSession::new(
             "p1".to_string(),
             "Main Portal".to_string(),
             "example.com".to_string(),
-        );
+            "isolated".to_string(),
+        ).unwrap();
 
         assert_eq!(session.current_url, "https://example.com");
         assert_eq!(session.history_index, 0);
+        assert_eq!(session.storage_scope, "isolated");
 
         session.navigate("google.com");
         assert_eq!(session.current_url, "https://google.com");
@@ -381,16 +439,18 @@ mod tests {
     }
 
     #[test]
-    fn portal_registry_crud() {
+    fn portal_registry_crud_and_lifecycle() {
         let registry = PortalRegistry::new();
         let info = registry.register(
             "p100".to_string(),
             "Test Portal".to_string(),
             "https://test.com".to_string(),
-        );
+            "isolated".to_string(),
+        ).unwrap();
 
         assert_eq!(info.id, "p100");
         assert_eq!(info.current_url, "https://test.com");
+        assert_eq!(info.storage_scope, "isolated");
 
         assert!(registry.get("p100").is_some());
         assert_eq!(registry.list().len(), 1);
@@ -405,8 +465,24 @@ mod tests {
         assert_eq!(updated.current_url, "https://test.com/page2");
         assert_eq!(updated.title.as_deref(), Some("Page 2 Title"));
 
+        // Lifecycle remove cleans up registry
         assert!(registry.unregister("p100"));
         assert!(registry.get("p100").is_none());
+        assert_eq!(registry.list().len(), 0);
+    }
+
+    #[test]
+    fn portal_registry_rejects_unsupported_storage_scope() {
+        let registry = PortalRegistry::new();
+        let err = registry.register(
+            "p101".to_string(),
+            "Invalid Portal".to_string(),
+            "https://test.com".to_string(),
+            "invalid_scope".to_string(),
+        ).unwrap_err();
+
+        assert!(err.contains("Unsupported storageScope: 'invalid_scope'"));
+        assert!(registry.get("p101").is_none());
     }
 
     #[test]
