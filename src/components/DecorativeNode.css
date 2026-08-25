@@ -11,9 +11,22 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
 }
 
+.decorative-node.variant-freehand,
+.decorative-node.variant-drawing {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
 .decorative-node.is-selected {
   border-color: #c084fc;
   box-shadow: 0 0 0 2px rgba(192, 132, 252, 0.24), 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.decorative-node.variant-freehand.is-selected,
+.decorative-node.variant-drawing.is-selected {
+  border-color: rgba(249, 115, 22, 0.6);
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.24);
 }
 
 .decorative-node__header {

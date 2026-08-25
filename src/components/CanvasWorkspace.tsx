@@ -9,7 +9,7 @@ import { NoteNode } from "./NoteNode";
 import { FileTreeNode } from "./FileTreeNode";
 import type { FileEntryPayload } from "./FileTreeNode";
 import { PortalNode } from "./PortalNode";
-import { DecorativeNode } from "./DecorativeNode";
+import { DecorativeNode, catmullRomPathSvg } from "./DecorativeNode";
 import { TerminalSettings, type TerminalSettingsValue } from "./TerminalSettings";
 import {
   applyTerminalSettings,
@@ -19,6 +19,7 @@ import {
 import type {
   Drawing,
   FileTreeContent,
+  FreehandContent,
   PortalContent,
   ShapeContent,
   StickyNoteContent,
@@ -144,6 +145,98 @@ export function createShapeCanvasNode(
   };
 }
 
+export interface CreateFreehandOptions {
+  id?: string;
+  points: Array<{ x: number; y: number }>;
+  freehandType?: "pen" | "highlighter";
+  strokeColor?: string;
+  strokeWidth?: number;
+  opacity?: number;
+}
+
+export function createFreehandCanvasNode(
+  position: { x: number; y: number },
+  dimensions: { width: number; height: number },
+  options: CreateFreehandOptions,
+): ReactFlowNode {
+  const freehandType = options.freehandType ?? "pen";
+  const strokeColor = options.strokeColor ?? (freehandType === "highlighter" ? "#facc15" : "#f97316");
+  const strokeWidth = options.strokeWidth ?? (freehandType === "highlighter" ? 20 : 4);
+  const opacity = options.opacity ?? (freehandType === "highlighter" ? 0.4 : 1);
+  const content: FreehandContent = {
+    freehandType,
+    points: options.points,
+    strokeColor,
+    strokeWidth,
+    opacity,
+    rotation: 0,
+  };
+  return {
+    id: options.id ?? crypto.randomUUID(),
+    type: "freehand",
+    position,
+    width: dimensions.width,
+    height: dimensions.height,
+    style: { width: dimensions.width, height: dimensions.height },
+    data: { content, contentVariant: "freehand" },
+  };
+}
+
+export function calculateFreehandStrokeFrame(
+  flowPoints: Array<{ x: number; y: number }>,
+  strokeWidth: number = 4,
+): {
+  position: { x: number; y: number };
+  dimensions: { width: number; height: number };
+  normalizedPoints: Array<{ x: number; y: number }>;
+} | null {
+  if (!Array.isArray(flowPoints) || flowPoints.length < 2) return null;
+  const xs = flowPoints.map((p) => p.x);
+  const ys = flowPoints.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const padding = Math.max(12, Math.ceil(strokeWidth / 2) + 6);
+  const posX = minX - padding;
+  const posY = minY - padding;
+  const width = Math.max(40, maxX - minX + padding * 2);
+  const height = Math.max(40, maxY - minY + padding * 2);
+
+  const normalizedPoints = flowPoints.map((p) => ({
+    x: Number(((p.x - posX) / width).toFixed(5)),
+    y: Number(((p.y - posY) / height).toFixed(5)),
+  }));
+
+  return {
+    position: { x: posX, y: posY },
+    dimensions: { width, height },
+    normalizedPoints,
+  };
+}
+
+export function isCanvasBackgroundTarget(target: unknown): boolean {
+  if (!target || typeof target !== "object" || !("closest" in target)) return false;
+  const element = target as { closest: (selector: string) => unknown };
+  if (
+    element.closest(".react-flow__node") ||
+    element.closest(".nodrag") ||
+    element.closest(".nowheel") ||
+    element.closest(".canvas-toolbar") ||
+    element.closest(".react-flow__controls") ||
+    element.closest(".react-flow__minimap") ||
+    element.closest(".react-flow__handle") ||
+    element.closest("button") ||
+    element.closest("input") ||
+    element.closest("textarea") ||
+    element.closest("select")
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export interface TerminalScrollbackMetadata {
   scrollbackFile?: string | null;
   scrollbackLineCount?: number;
@@ -258,6 +351,42 @@ function CanvasDrawingOverlay({ drawings }: { drawings: readonly ValidatedCanvas
   );
 }
 
+function CanvasLiveStrokeOverlay({
+  points,
+  freehandType,
+}: {
+  points: ReadonlyArray<{ x: number; y: number }>;
+  freehandType: "pen" | "highlighter";
+}) {
+  if (points.length < 2) return null;
+  const strokeColor = freehandType === "highlighter" ? "#facc15" : "#f97316";
+  const strokeWidth = freehandType === "highlighter" ? 20 : 4;
+  const opacity = freehandType === "highlighter" ? 0.4 : 1;
+  const pathData = catmullRomPathSvg(points as Array<{ x: number; y: number }>);
+  return (
+    <ViewportPortal>
+      <svg
+        className="canvas-live-stroke-overlay"
+        aria-hidden="true"
+        width="100%"
+        height="100%"
+        style={{ position: "absolute", inset: 0, overflow: "visible", pointerEvents: "none" }}
+      >
+        <path
+          d={pathData}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          opacity={opacity}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+    </ViewportPortal>
+  );
+}
+
 const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
   useMaestroController();
   const { setViewport, getZoom, setCenter, fitView, screenToFlowPosition } = useReactFlow();
@@ -274,6 +403,10 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     duplicateId: string;
     originalPosition: { x: number; y: number };
   } | null>(null);
+  const [activeTool, setActiveTool] = useState<"select" | "pen" | "highlighter">("select");
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawingPoints, setDrawingPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const pointerIdRef = useRef<number | null>(null);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [gridSize, setGridSize] = useState(CANVAS_GRID_SPACING);
   const [showJumpBadges, setShowJumpBadges] = useState(false);
@@ -282,6 +415,84 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
   const [showRoutinesPanel, setShowRoutinesPanel] = useState(false);
   const [terminalSettingsNodeId, setTerminalSettingsNodeId] = useState<string | null>(null);
   const [routinesWorkspaceError, setRoutinesWorkspaceError] = useState<string | null>(null);
+
+  const onPointerDownWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (activeTool === "select") return;
+    if (!isCanvasBackgroundTarget(event.target)) return;
+
+    try {
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      pointerIdRef.current = event.pointerId;
+    } catch {
+      // ignore
+    }
+
+    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    setIsDrawing(true);
+    setDrawingPoints([flowPos]);
+  }, [activeTool, screenToFlowPosition]);
+
+  const onPointerMoveWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDrawing || (pointerIdRef.current !== null && event.pointerId !== pointerIdRef.current)) return;
+    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+
+    setDrawingPoints((prev) => {
+      if (prev.length === 0) return [flowPos];
+      const last = prev[prev.length - 1];
+      const distSq = (flowPos.x - last.x) ** 2 + (flowPos.y - last.y) ** 2;
+      if (distSq < 4) return prev;
+      if (prev.length >= 2000) return prev;
+      return [...prev, flowPos];
+    });
+  }, [isDrawing, screenToFlowPosition]);
+
+  const onPointerUpWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDrawing) return;
+    if (pointerIdRef.current !== null && event.currentTarget.hasPointerCapture(pointerIdRef.current)) {
+      try {
+        event.currentTarget.releasePointerCapture(pointerIdRef.current);
+      } catch {
+        // ignore
+      }
+    }
+    pointerIdRef.current = null;
+
+    if (drawingPoints.length >= 2) {
+      const strokeWidth = activeTool === "highlighter" ? 20 : 4;
+      const frameResult = calculateFreehandStrokeFrame(drawingPoints, strokeWidth);
+      if (frameResult) {
+        const newNode = createFreehandCanvasNode(
+          frameResult.position,
+          frameResult.dimensions,
+          {
+            points: frameResult.normalizedPoints,
+            freehandType: activeTool === "highlighter" ? "highlighter" : "pen",
+            strokeColor: activeTool === "highlighter" ? "#facc15" : "#f97316",
+            strokeWidth,
+            opacity: activeTool === "highlighter" ? 0.4 : 1,
+          },
+        );
+        addNode(newNode);
+      }
+    }
+
+    setIsDrawing(false);
+    setDrawingPoints([]);
+  }, [activeTool, addNode, drawingPoints, isDrawing]);
+
+  const onPointerCancelWorkspace = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDrawing) return;
+    if (pointerIdRef.current !== null && event.currentTarget.hasPointerCapture(pointerIdRef.current)) {
+      try {
+        event.currentTarget.releasePointerCapture(pointerIdRef.current);
+      } catch {
+        // ignore
+      }
+    }
+    pointerIdRef.current = null;
+    setIsDrawing(false);
+    setDrawingPoints([]);
+  }, [isDrawing]);
   const routinesWorkspacePath = workspacePath?.trim() || "";
   const workspaceDirectory = workspaceFallbackDirectory(
     currentDocument?.payload.workingDirectory,
@@ -726,6 +937,17 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isEditing()) return;
+      if (event.key === "Escape") {
+        if (isDrawing) {
+          event.preventDefault();
+          pointerIdRef.current = null;
+          setIsDrawing(false);
+          setDrawingPoints([]);
+        } else if (activeTool !== "select") {
+          event.preventDefault();
+          setActiveTool("select");
+        }
+      }
       const modified = event.metaKey || event.ctrlKey;
       if (event.key === "Control" || event.key === "Meta") setShowJumpBadges(true);
       if (modified && event.key >= "1" && event.key <= "9") {
@@ -761,7 +983,13 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
   }, [duplicateSelectedNode, edges, getZoom, jumpMap, nodes, setCenter, setEdges, setNodes, setViewport]);
 
   return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative", backgroundColor: "#09090b" }}>
+    <div
+      style={{ width: "100vw", height: "100vh", position: "relative", backgroundColor: "#09090b", cursor: activeTool !== "select" ? "crosshair" : "default" }}
+      onPointerDown={onPointerDownWorkspace}
+      onPointerMove={onPointerMoveWorkspace}
+      onPointerUp={onPointerUpWorkspace}
+      onPointerCancel={onPointerCancelWorkspace}
+    >
       <div
         className="canvas-toolbar nodrag nowheel"
         role="toolbar"
@@ -923,6 +1151,26 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
           </button>
+
+          <button
+            type="button"
+            className={`canvas-action-btn icon-btn ${activeTool === "pen" ? "active" : ""}`}
+            onClick={() => setActiveTool((prev) => (prev === "pen" ? "select" : "pen"))}
+            aria-label="Ferramenta Caneta (Pen)"
+            title="Desenhar com caneta"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+          </button>
+
+          <button
+            type="button"
+            className={`canvas-action-btn icon-btn ${activeTool === "highlighter" ? "active" : ""}`}
+            onClick={() => setActiveTool((prev) => (prev === "highlighter" ? "select" : "highlighter"))}
+            aria-label="Ferramenta Marca-texto (Highlighter)"
+            title="Desenhar com marca-texto"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 11-6 6v3h3l6-6"></path><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"></path></svg>
+          </button>
         </div>
       </div>
       <PreferencesPanel
@@ -977,6 +1225,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
         colorMode="dark"
       >
         <CanvasDrawingOverlay drawings={overlayDrawings} />
+        <CanvasLiveStrokeOverlay points={drawingPoints} freehandType={activeTool === "highlighter" ? "highlighter" : "pen"} />
         <Background variant={BackgroundVariant.Dots} gap={snapToGrid ? gridSize : CANVAS_GRID_SPACING} size={1} color="#27272a" />
         <Controls style={{ backgroundColor: "#18181b", borderColor: "#27272a", color: "#f4f4f5" }} />
         <MiniMap style={{ backgroundColor: "#18181b", borderColor: "#27272a", borderRadius: 8 }} nodeColor="#3b82f6" maskColor="rgba(0, 0, 0, 0.7)" />

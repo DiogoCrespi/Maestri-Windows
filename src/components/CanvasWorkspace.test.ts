@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { Node as ReactFlowNode } from "@xyflow/react";
 import {
   CANVAS_GRID_SPACING,
+  calculateFreehandStrokeFrame,
   canDuplicateCanvasNode,
+  createFreehandCanvasNode,
   createShapeCanvasNode,
   createTextCanvasNode,
   duplicateCanvasNode,
+  isCanvasBackgroundTarget,
   mergeTerminalScrollbackMetadata,
   snapCanvasPosition,
   validatedCanvasDrawings,
 } from "./CanvasWorkspace";
-import type { TerminalContent } from "../model/workspace";
+import type { FreehandContent, TerminalContent } from "../model/workspace";
+import { reactFlowNodeToCanvasNode } from "../store/workspaceStore";
 
 function node(type: string): ReactFlowNode {
   return {
@@ -106,5 +110,57 @@ describe("CanvasWorkspace grid and duplication helpers", () => {
       scrollbackFile: "new.log",
       scrollbackLineCount: 9,
     });
+  });
+});
+
+describe("Freehand stroke calculations and background target safety", () => {
+  it("calculates stroke bounding box, dimensions and normalized relative points", () => {
+    const rawPoints = [{ x: 100, y: 100 }, { x: 300, y: 200 }];
+    const strokeWidth = 4;
+    const result = calculateFreehandStrokeFrame(rawPoints, strokeWidth);
+    expect(result).not.toBeNull();
+    if (!result) return;
+
+    expect(result.position.x).toBeLessThan(100);
+    expect(result.position.y).toBeLessThan(100);
+    expect(result.dimensions.width).toBeGreaterThan(200);
+    expect(result.dimensions.height).toBeGreaterThan(100);
+
+    expect(result.normalizedPoints).toHaveLength(2);
+    expect(result.normalizedPoints[0].x).toBeGreaterThanOrEqual(0);
+    expect(result.normalizedPoints[0].x).toBeLessThanOrEqual(0.5);
+    expect(result.normalizedPoints[1].x).toBeGreaterThanOrEqual(0.5);
+    expect(result.normalizedPoints[1].x).toBeLessThanOrEqual(1.0);
+  });
+
+  it("creates a freehand node with v2 content and schema v2 serialization wrapper", () => {
+    const points = [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }];
+    const node = createFreehandCanvasNode(
+      { x: 50, y: 50 },
+      { width: 200, height: 150 },
+      { points, freehandType: "pen", id: "freehand-1" },
+    );
+    expect(node.id).toBe("freehand-1");
+    expect(node.type).toBe("freehand");
+    expect(node.data.contentVariant).toBe("freehand");
+    const content = node.data.content as FreehandContent;
+    expect(content.freehandType).toBe("pen");
+    expect(content.strokeColor).toBe("#f97316");
+
+    const canvasNode = reactFlowNodeToCanvasNode(node);
+    expect(canvasNode.content).toEqual({ freehand: { _0: content } });
+  });
+
+  it("prevents starting drawing on controls, nodes, inputs and buttons", () => {
+    const mockElement = (selectors: string[]) => ({
+      closest: (sel: string) => selectors.includes(sel),
+    });
+
+    expect(isCanvasBackgroundTarget(mockElement([]))).toBe(true);
+    expect(isCanvasBackgroundTarget(mockElement([".react-flow__node"]))).toBe(false);
+    expect(isCanvasBackgroundTarget(mockElement([".canvas-toolbar"]))).toBe(false);
+    expect(isCanvasBackgroundTarget(mockElement(["button"]))).toBe(false);
+    expect(isCanvasBackgroundTarget(mockElement(["input"]))).toBe(false);
+    expect(isCanvasBackgroundTarget(null)).toBe(false);
   });
 });

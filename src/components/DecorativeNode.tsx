@@ -134,15 +134,61 @@ function StrokeSvg({ content, width, height }: { content: DecorativeContent; wid
   );
 }
 
+export function relativeToSvgPoints(
+  points: Array<{ x: number; y: number }>,
+  width: number,
+  height: number,
+): Array<{ x: number; y: number }> {
+  if (points.length === 0) return [];
+  const maxPointX = Math.max(...points.map((p) => Math.abs(p.x)));
+  const maxPointY = Math.max(...points.map((p) => Math.abs(p.y)));
+  const isNormalized = maxPointX <= 1.5 && maxPointY <= 1.5;
+  return points.map((p) => ({
+    x: isNormalized ? p.x * width : p.x,
+    y: isNormalized ? p.y * height : p.y,
+  }));
+}
+
+export function catmullRomPathSvg(pts: Array<{ x: number; y: number }>): string {
+  if (pts.length === 0) return "";
+  if (pts.length < 3) {
+    return pts.map((p, i) => (i === 0 ? `M ${p.x.toFixed(2)} ${p.y.toFixed(2)}` : `L ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)).join(" ");
+  }
+  let path = `M ${pts[0].x.toFixed(2)} ${pts[0].y.toFixed(2)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(i - 1, 0)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(i + 2, pts.length - 1)];
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    path += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+  }
+  return path;
+}
+
 function FreehandSvg({ content, width, height }: { content: DecorativeContent; width: number; height: number }) {
   const points = finitePoints(content.points);
-  const stroke = colorValue(content.strokeColor, "#f97316");
-  const strokeWidth = boundedNumber(content.strokeWidth, 4, 0.5, 32);
-  const opacity = boundedNumber(content.opacity, content.freehandType === "highlighter" ? 0.35 : 1, 0, 1);
+  const stroke = colorValue(content.strokeColor, content.freehandType === "highlighter" ? "#facc15" : "#f97316");
+  const strokeWidth = boundedNumber(content.strokeWidth, content.freehandType === "highlighter" ? 18 : 4, 0.5, 64);
+  const opacity = boundedNumber(content.opacity, content.freehandType === "highlighter" ? 0.4 : 1, 0, 1);
+  const scaledPoints = relativeToSvgPoints(points, width, height);
+  const pathData = catmullRomPathSvg(scaledPoints);
+
   return (
     <svg className="decorative-node__svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="freehand drawing">
-      {points.length > 1 ? (
-        <polyline points={svgPoints(points)} fill="none" stroke={stroke} strokeWidth={strokeWidth} opacity={opacity} strokeLinecap="round" strokeLinejoin="round" />
+      {scaledPoints.length > 1 ? (
+        <path
+          d={pathData}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          opacity={opacity}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       ) : (
         <text x="50%" y="50%" textAnchor="middle" className="decorative-node__empty">Desenho vazio</text>
       )}
@@ -209,7 +255,7 @@ export const DecorativeNode: React.FC<NodeProps> = ({ id, selected, data, width,
   }
 
   return (
-    <div className={`decorative-node ${selected ? "is-selected" : ""}`}>
+    <div className={`decorative-node variant-${variant} ${selected ? "is-selected" : ""}`}>
       <NodeResizer
         minWidth={40}
         minHeight={40}
