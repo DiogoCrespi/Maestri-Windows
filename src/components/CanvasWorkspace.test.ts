@@ -115,41 +115,62 @@ describe("CanvasWorkspace grid and duplication helpers", () => {
 });
 
 describe("Freehand stroke calculations and background target safety", () => {
-  it("calculates stroke bounding box, dimensions and normalized relative points", () => {
-    const rawPoints = [{ x: 100, y: 100 }, { x: 300, y: 200 }];
-    const strokeWidth = 4;
-    const result = calculateFreehandStrokeFrame(rawPoints, strokeWidth);
+  it("calculates macOS parity stroke frame with fixed padding 8 and exact normalized points", () => {
+    const rawPoints = [{ x: 100, y: 100 }, { x: 200, y: 200 }];
+    const result = calculateFreehandStrokeFrame(rawPoints, 3);
     expect(result).not.toBeNull();
     if (!result) return;
 
-    expect(result.position.x).toBeLessThan(100);
-    expect(result.position.y).toBeLessThan(100);
-    expect(result.dimensions.width).toBeGreaterThan(200);
-    expect(result.dimensions.height).toBeGreaterThan(100);
+    // macOS fixed padding = 8 -> posX = 92, posY = 92, width = 116, height = 116
+    expect(result.position).toEqual({ x: 92, y: 92 });
+    expect(result.dimensions).toEqual({ width: 116, height: 116 });
 
+    // Normalized: (100 - 92)/116 = 0.06897, (200 - 92)/116 = 0.93103
     expect(result.normalizedPoints).toHaveLength(2);
-    expect(result.normalizedPoints[0].x).toBeGreaterThanOrEqual(0);
-    expect(result.normalizedPoints[0].x).toBeLessThanOrEqual(0.5);
-    expect(result.normalizedPoints[1].x).toBeGreaterThanOrEqual(0.5);
-    expect(result.normalizedPoints[1].x).toBeLessThanOrEqual(1.0);
+    expect(result.normalizedPoints[0]).toEqual({ x: 0.06897, y: 0.06897 });
+    expect(result.normalizedPoints[1]).toEqual({ x: 0.93103, y: 0.93103 });
   });
 
-  it("creates a freehand node with v2 content and schema v2 serialization wrapper", () => {
-    const points = [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }];
-    const node = createFreehandCanvasNode(
-      { x: 50, y: 50 },
-      { width: 200, height: 150 },
-      { points, freehandType: "pen", id: "freehand-1" },
-    );
-    expect(node.id).toBe("freehand-1");
-    expect(node.type).toBe("freehand");
-    expect(node.data.contentVariant).toBe("freehand");
-    const content = node.data.content as FreehandContent;
-    expect(content.freehandType).toBe("pen");
-    expect(content.strokeColor).toBe("#f97316");
+  it("creates freehand pen and highlighter nodes matching macOS default content schema", () => {
+    const points = [{ x: 0.06897, y: 0.06897 }, { x: 0.93103, y: 0.93103 }];
 
-    const canvasNode = reactFlowNodeToCanvasNode(node);
-    expect(canvasNode.content).toEqual({ freehand: { _0: content } });
+    // Pen defaults: pen=3, opacity=1, color="blue"
+    const penNode = createFreehandCanvasNode(
+      { x: 92, y: 92 },
+      { width: 116, height: 116 },
+      { points, freehandType: "pen", id: "freehand-pen" },
+    );
+    expect(penNode.id).toBe("freehand-pen");
+    expect(penNode.type).toBe("freehand");
+    expect(penNode.data.contentVariant).toBe("freehand");
+    const penContent = penNode.data.content as FreehandContent;
+    expect(penContent).toEqual({
+      freehandType: "pen",
+      points,
+      strokeColor: "blue",
+      strokeWidth: 3,
+      opacity: 1,
+      rotation: 0,
+    });
+
+    const penCanvasNode = reactFlowNodeToCanvasNode(penNode);
+    expect(penCanvasNode.content).toEqual({ freehand: { _0: penContent } });
+
+    // Highlighter defaults: highlighter=12, opacity=0.4, color="yellow"
+    const highlighterNode = createFreehandCanvasNode(
+      { x: 92, y: 92 },
+      { width: 116, height: 116 },
+      { points, freehandType: "highlighter", id: "freehand-highlighter" },
+    );
+    const highlighterContent = highlighterNode.data.content as FreehandContent;
+    expect(highlighterContent).toEqual({
+      freehandType: "highlighter",
+      points,
+      strokeColor: "yellow",
+      strokeWidth: 12,
+      opacity: 0.4,
+      rotation: 0,
+    });
   });
 
   it("prevents starting drawing on controls, nodes, inputs and buttons", () => {

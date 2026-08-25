@@ -171,8 +171,8 @@ export function catmullRomPathSvg(pts: Array<{ x: number; y: number }>): string 
 
 function FreehandSvg({ content, width, height }: { content: DecorativeContent; width: number; height: number }) {
   const points = finitePoints(content.points);
-  const stroke = colorValue(content.strokeColor, content.freehandType === "highlighter" ? "#facc15" : "#f97316");
-  const strokeWidth = boundedNumber(content.strokeWidth, content.freehandType === "highlighter" ? 18 : 4, 0.5, 64);
+  const stroke = colorValue(content.strokeColor, content.freehandType === "highlighter" ? "yellow" : "blue");
+  const strokeWidth = boundedNumber(content.strokeWidth, content.freehandType === "highlighter" ? 12 : 3, 0.5, 64);
   const opacity = boundedNumber(content.opacity, content.freehandType === "highlighter" ? 0.4 : 1, 0, 1);
   const scaledPoints = relativeToSvgPoints(points, width, height);
   const pathData = catmullRomPathSvg(scaledPoints);

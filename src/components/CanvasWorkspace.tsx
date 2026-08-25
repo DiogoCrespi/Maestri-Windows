@@ -157,26 +157,29 @@ export interface CreateFreehandOptions {
 export function createFreehandCanvasNode(
   position: { x: number; y: number },
   dimensions: { width: number; height: number },
-  options: CreateFreehandOptions,
+  options: {
+    points: Array<{ x: number; y: number }>;
+    freehandType?: "pen" | "highlighter";
+    strokeColor?: string;
+    strokeWidth?: number;
+    opacity?: number;
+    rotation?: number;
+    id?: string;
+  },
 ): ReactFlowNode {
   const freehandType = options.freehandType ?? "pen";
-  const strokeColor = options.strokeColor ?? (freehandType === "highlighter" ? "#facc15" : "#f97316");
-  const strokeWidth = options.strokeWidth ?? (freehandType === "highlighter" ? 20 : 4);
-  const opacity = options.opacity ?? (freehandType === "highlighter" ? 0.4 : 1);
   const content: FreehandContent = {
     freehandType,
     points: options.points,
-    strokeColor,
-    strokeWidth,
-    opacity,
-    rotation: 0,
+    strokeColor: options.strokeColor ?? (freehandType === "highlighter" ? "yellow" : "blue"),
+    strokeWidth: options.strokeWidth ?? (freehandType === "highlighter" ? 12 : 3),
+    opacity: options.opacity ?? (freehandType === "highlighter" ? 0.4 : 1),
+    rotation: options.rotation ?? 0,
   };
   return {
-    id: options.id ?? crypto.randomUUID(),
+    id: options.id ?? `freehand-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     type: "freehand",
     position,
-    width: dimensions.width,
-    height: dimensions.height,
     style: { width: dimensions.width, height: dimensions.height },
     data: { content, contentVariant: "freehand" },
   };
@@ -184,7 +187,7 @@ export function createFreehandCanvasNode(
 
 export function calculateFreehandStrokeFrame(
   flowPoints: Array<{ x: number; y: number }>,
-  strokeWidth: number = 4,
+  _strokeWidth: number = 3,
 ): {
   position: { x: number; y: number };
   dimensions: { width: number; height: number };
@@ -198,15 +201,15 @@ export function calculateFreehandStrokeFrame(
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
 
-  const padding = Math.max(12, Math.ceil(strokeWidth / 2) + 6);
+  const padding = 8;
   const posX = minX - padding;
   const posY = minY - padding;
-  const width = Math.max(40, maxX - minX + padding * 2);
-  const height = Math.max(40, maxY - minY + padding * 2);
+  const width = (maxX - minX) + padding * 2;
+  const height = (maxY - minY) + padding * 2;
 
   const normalizedPoints = flowPoints.map((p) => ({
-    x: Number(((p.x - posX) / width).toFixed(5)),
-    y: Number(((p.y - posY) / height).toFixed(5)),
+    x: width > 0 ? Number(((p.x - posX) / width).toFixed(5)) : 0.5,
+    y: height > 0 ? Number(((p.y - posY) / height).toFixed(5)) : 0.5,
   }));
 
   return {
@@ -514,7 +517,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
       if (prev.length === 0) return [flowPos];
       const last = prev[prev.length - 1];
       const distSq = (flowPos.x - last.x) ** 2 + (flowPos.y - last.y) ** 2;
-      if (distSq < 4) return prev;
+      if (distSq < 16) return prev;
       if (prev.length >= 2000) return prev;
       return [...prev, flowPos];
     });
@@ -525,7 +528,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     releasePointerCapture();
 
     if (drawingPoints.length >= 2) {
-      const strokeWidth = activeTool === "highlighter" ? 20 : 4;
+      const strokeWidth = activeTool === "highlighter" ? 12 : 3;
       const frameResult = calculateFreehandStrokeFrame(drawingPoints, strokeWidth);
       if (frameResult) {
         const newNode = createFreehandCanvasNode(
@@ -534,7 +537,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           {
             points: frameResult.normalizedPoints,
             freehandType: activeTool === "highlighter" ? "highlighter" : "pen",
-            strokeColor: activeTool === "highlighter" ? "#facc15" : "#f97316",
+            strokeColor: activeTool === "highlighter" ? "yellow" : "blue",
             strokeWidth,
             opacity: activeTool === "highlighter" ? 0.4 : 1,
           },
