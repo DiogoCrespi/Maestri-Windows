@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position, NodeProps, NodeResizer } from "@xyflow/react";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { Webview } from "@tauri-apps/api/webview";
@@ -22,7 +22,6 @@ export interface StorageScopeValidationResult {
   errorMessage?: string;
   webviewOptions?: {
     incognito?: boolean;
-    dataDirectory?: string;
   };
 }
 
@@ -35,26 +34,11 @@ export function validateFrontendStorageScope(rawScope: string): StorageScopeVali
       webviewOptions: { incognito: true },
     };
   }
-  if (trimmed.startsWith("shared:")) {
-    const groupId = trimmed.slice(7).trim();
-    if (!groupId) {
-      return {
-        isValid: false,
-        scope: trimmed,
-        errorMessage: `Escopo de armazenamento inválido: ID do grupo compartilhado não pode ser vazio ("${trimmed}")`,
-      };
-    }
-    return {
-      isValid: true,
-      scope: `shared:${groupId}`,
-      webviewOptions: { dataDirectory: `shared-sessions/${groupId}` },
-    };
-  }
   if (trimmed === "shared") {
     return {
       isValid: false,
-      scope: trimmed,
-      errorMessage: `Escopo de armazenamento 'shared' requer grupo de sessão explícito (ex: 'shared:grupo_id')`,
+      scope: "shared",
+      errorMessage: `Escopo de armazenamento 'shared' não é suportado no runtime Windows sem integração de edges portal-a-portal (lacuna documentada)`,
     };
   }
   return {
@@ -78,7 +62,12 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const content = nodeData?.content;
 
   const rawStorageScope = content?.storageScope ?? "isolated";
-  const validation = validateFrontendStorageScope(rawStorageScope);
+  const validation = useMemo(() => validateFrontendStorageScope(rawStorageScope), [rawStorageScope]);
+
+  const isScopeValid = validation.isValid;
+  const validatedScope = validation.scope;
+  const scopeErrorMessage = validation.errorMessage;
+  const incognitoOption = validation.webviewOptions?.incognito;
 
   const initialUrl = (
     content?.currentURL ??
@@ -93,8 +82,8 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const [activeUrl, setActiveUrl] = useState(() => sanitizeUrl(initialUrl));
   const [history, setHistory] = useState<string[]>([sanitizeUrl(initialUrl)]);
   const [historyIndex, setHistoryIndex] = useState(0);
-  const [hasError, setHasError] = useState(!validation.isValid);
-  const [errorMessage, setErrorMessage] = useState<string | null>(validation.errorMessage ?? null);
+  const [hasError, setHasError] = useState(!isScopeValid);
+  const [errorMessage, setErrorMessage] = useState<string | null>(scopeErrorMessage ?? null);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const portalBodyRef = useRef<HTMLDivElement | null>(null);
@@ -115,30 +104,30 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
     setActiveUrl(sanitized);
     setHistory([sanitized]);
     setHistoryIndex(0);
-    if (validation.isValid) {
+    if (isScopeValid) {
       setHasError(false);
       setErrorMessage(null);
     }
 
     // A URL update coming from the canvas may be external to this node. Keep
     // the existing WebView2 and ask the registry to navigate it in place.
-    if (isNative && validation.isValid && sanitized !== lastRequestedUrlRef.current) {
+    if (isNative && isScopeValid && sanitized !== lastRequestedUrlRef.current) {
       lastRequestedUrlRef.current = sanitized;
       void desktopBridge.portalNavigate(portalId, sanitized).catch((error: unknown) => {
         console.error(`Falha ao sincronizar URL do Portal ${portalId}`, error);
         setHasError(true);
       });
     }
-  }, [initialUrl, isNative, portalId, validation.isValid]);
+  }, [initialUrl, isNative, portalId, isScopeValid]);
 
   // Register before commands can be issued and always pair registration with
   // an unregister. Waiting on the registration promise makes cleanup safe if
   // the node unmounts while the native command is still in flight.
   useEffect(() => {
     if (!isNative) return;
-    if (!validation.isValid) {
+    if (!isScopeValid) {
       setHasError(true);
-      setErrorMessage(validation.errorMessage || `Escopo não suportado: "${rawStorageScope}"`);
+      setErrorMessage(scopeErrorMessage || `Escopo não suportado: "${rawStorageScope}"`);
       return;
     }
 
@@ -147,7 +136,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
       portalId,
       portalName,
       sanitizeUrl(initialUrl),
-      validation.scope,
+      validatedScope,
     );
 
     void registration
@@ -178,13 +167,13 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         .then(() => desktopBridge.portalUnregister(portalId))
         .catch(() => undefined);
     };
-  }, [isNative, portalId, rawStorageScope, validation.isValid, validation.scope]);
+  }, [isNative, portalId, portalName, initialUrl, rawStorageScope, isScopeValid, validatedScope, scopeErrorMessage, activeUrl]);
 
   useEffect(() => {
     if (!isNative || !portalBodyRef.current) return;
-    if (!validation.isValid) {
+    if (!isScopeValid) {
       setHasError(true);
-      setErrorMessage(validation.errorMessage || `Escopo não suportado: "${rawStorageScope}"`);
+      setErrorMessage(scopeErrorMessage || `Escopo não suportado: "${rawStorageScope}"`);
       return;
     }
 
@@ -203,7 +192,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           y: Math.max(0, rect.top),
           width: Math.max(1, rect.width),
           height: Math.max(1, rect.height),
-          ...validation.webviewOptions,
+          incognito: incognitoOption,
         });
         nativeWebviewRef.current = candidate;
         candidate.once("tauri://created", () => {
@@ -232,10 +221,10 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         void candidate.close().catch(() => undefined);
       }
     };
-  }, [isNative, nativeLabel, rawStorageScope, validation.isValid, validation.webviewOptions]);
+  }, [isNative, nativeLabel, rawStorageScope, isScopeValid, scopeErrorMessage, incognitoOption]);
 
   useEffect(() => {
-    if (!isNative || !validation.isValid) return;
+    if (!isNative || !isScopeValid) return;
     let animationFrame = 0;
     let lastBounds = "";
     let visible = true;
@@ -273,14 +262,14 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
     };
     animationFrame = window.requestAnimationFrame(syncBounds);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [isNative, validation.isValid]);
+  }, [isNative, isScopeValid]);
 
   const navigateTo = (rawUrl: string, isHistoryNav = false) => {
     const sanitized = sanitizeUrl(rawUrl);
     lastRequestedUrlRef.current = sanitized;
     setInputUrl(sanitized);
     setActiveUrl(sanitized);
-    if (validation.isValid) setHasError(false);
+    if (isScopeValid) setHasError(false);
 
     if (!isHistoryNav) {
       const newHistory = history.slice(0, historyIndex + 1);
@@ -291,7 +280,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
 
     nodeData.onChangeURL?.(sanitized);
 
-    if (isNative && validation.isValid && !isHistoryNav) {
+    if (isNative && isScopeValid && !isHistoryNav) {
       void desktopBridge.portalNavigate(portalId, sanitized).catch((error: unknown) => {
         console.error(`Falha ao navegar Portal ${portalId}`, error);
         setHasError(true);
@@ -336,7 +325,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   };
 
   const handleReload = () => {
-    if (validation.isValid) setHasError(false);
+    if (isScopeValid) setHasError(false);
     if (isNative) {
       void desktopBridge.portalReload(portalId).catch((error: unknown) => {
         console.error(`Falha ao recarregar Portal ${portalId}`, error);
@@ -412,8 +401,8 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           />
         </form>
 
-        <span className={`portal-scope-badge ${validation.isValid ? validation.scope.split(":")[0] : "invalid"}`}>
-          {validation.isValid ? validation.scope : "unsupported"}
+        <span className={`portal-scope-badge ${isScopeValid ? validatedScope : "invalid"}`}>
+          {isScopeValid ? validatedScope : "unsupported"}
         </span>
 
         <button
@@ -454,7 +443,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           </div>
         ) : isNative ? (
           <div className="portal-native-placeholder" aria-label="Portal WebView2 nativo">
-            WebView2 nativo ativo ({validation.scope})
+            WebView2 nativo ativo ({validatedScope})
           </div>
         ) : (
           <iframe

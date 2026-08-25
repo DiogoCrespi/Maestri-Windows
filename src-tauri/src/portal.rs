@@ -37,19 +37,22 @@ pub fn portal_webview_label(id: &str) -> String {
     format!("portal:{id}")
 }
 
+/// Validates the canonical `storageScope`.
+///
+/// Per macOS specification and `NodeContent.swift`, valid `storageScope` values are
+/// strictly `"isolated"` or `"shared"`.
+///
+/// In this Windows slice:
+/// - `"isolated"` (or empty) is fully supported using in-memory incognito WebView2.
+/// - `"shared"` is currently unsupported in single-portal runtime as portal-to-portal
+///   edge session sharing is not implemented in this slice, returning an explicit error.
+/// - Any other value is rejected with an explicit unsupported error.
 pub fn validate_storage_scope(scope: &str) -> Result<String, String> {
     let trimmed = scope.trim();
     if trimmed.is_empty() || trimmed == "isolated" {
         Ok("isolated".to_string())
     } else if trimmed == "shared" {
-        Err("Unsupported storageScope: 'shared' requires an explicit shared group ID (e.g., 'shared:group_id')".to_string())
-    } else if trimmed.starts_with("shared:") {
-        let group_id = trimmed.trim_start_matches("shared:").trim();
-        if group_id.is_empty() {
-            Err("Unsupported storageScope: shared group ID cannot be empty".to_string())
-        } else {
-            Ok(format!("shared:{group_id}"))
-        }
+        Err("Unsupported storageScope: 'shared' is currently unsupported on Windows without portal-to-portal edge session sharing".to_string())
     } else {
         Err(format!("Unsupported storageScope: '{trimmed}'"))
     }
@@ -391,18 +394,16 @@ mod tests {
     }
 
     #[test]
-    fn storage_scope_validation_isolated_and_shared() {
+    fn storage_scope_validation_canonical_rules() {
         assert_eq!(validate_storage_scope("isolated").unwrap(), "isolated");
         assert_eq!(validate_storage_scope("").unwrap(), "isolated");
         assert_eq!(validate_storage_scope("  ").unwrap(), "isolated");
 
-        assert_eq!(validate_storage_scope("shared:group_123").unwrap(), "shared:group_123");
+        let err_shared = validate_storage_scope("shared").unwrap_err();
+        assert!(err_shared.contains("currently unsupported on Windows"));
 
-        let err_plain_shared = validate_storage_scope("shared").unwrap_err();
-        assert!(err_plain_shared.contains("requires an explicit shared group ID"));
-
-        let err_empty_group = validate_storage_scope("shared:  ").unwrap_err();
-        assert!(err_empty_group.contains("shared group ID cannot be empty"));
+        let err_shared_group = validate_storage_scope("shared:group_123").unwrap_err();
+        assert!(err_shared_group.contains("Unsupported storageScope: 'shared:group_123'"));
 
         let err_unsupported = validate_storage_scope("workspace").unwrap_err();
         assert!(err_unsupported.contains("Unsupported storageScope: 'workspace'"));
@@ -478,10 +479,10 @@ mod tests {
             "p101".to_string(),
             "Invalid Portal".to_string(),
             "https://test.com".to_string(),
-            "invalid_scope".to_string(),
+            "shared".to_string(),
         ).unwrap_err();
 
-        assert!(err.contains("Unsupported storageScope: 'invalid_scope'"));
+        assert!(err.contains("Unsupported storageScope: 'shared'"));
         assert!(registry.get("p101").is_none());
     }
 
