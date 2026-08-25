@@ -309,6 +309,7 @@ export function parseWorkspaceDocument(input: unknown): WorkspaceDocument {
   payload.drawings = payload.drawings ?? [];
 
   return {
+    ...raw,
     schemaVersion,
     type: "workspace",
     payload: payload as WorkspacePayload,

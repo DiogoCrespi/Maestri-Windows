@@ -103,6 +103,7 @@ export function canvasNodeToReactFlowNode(node: CanvasNode): ReactFlowNode {
       isLocked: node.isLocked,
       createdAt: node.createdAt,
       lastModifiedAt: node.lastModifiedAt,
+      _rawNode: node,
     },
   };
 }
@@ -115,15 +116,35 @@ export function reactFlowNodeToCanvasNode(rfNode: ReactFlowNode): CanvasNode {
   if (!data.content || !contentVariant) {
     throw new Error(`ReactFlowNode ${rfNode.id} missing content data`);
   }
+
+  const rawNode = (data._rawNode ?? {}) as Record<string, unknown>;
+  const rawContent = (rawNode.content ?? {}) as Record<string, unknown>;
+  const rawVariantWrapper = (rawContent[contentVariant] ?? {}) as Record<string, unknown>;
+  const rawInner0 = (rawVariantWrapper._0 ?? {}) as Record<string, unknown>;
+
+  const mergedInner0 = {
+    ...rawInner0,
+    ...(data.content as Record<string, unknown>),
+  };
+
+  const finalContent = {
+    ...rawContent,
+    [contentVariant]: {
+      ...rawVariantWrapper,
+      _0: mergedInner0,
+    },
+  } as NodeContent;
+
   return {
+    ...rawNode,
     id: rfNode.id,
     frame: frameToArray({ x: rfNode.position.x, y: rfNode.position.y, width, height }),
-    content: wrapNodeContent(contentVariant, data.content),
-    zIndex: rfNode.zIndex ?? 0,
+    content: finalContent,
+    zIndex: rfNode.zIndex ?? (rawNode.zIndex as number | undefined) ?? 0,
     isLocked: data.isLocked === true,
-    createdAt: typeof data.createdAt === "string" ? data.createdAt : new Date().toISOString(),
-    lastModifiedAt: new Date().toISOString(),
-  };
+    createdAt: typeof data.createdAt === "string" ? data.createdAt : (rawNode.createdAt as string | undefined) ?? new Date().toISOString(),
+    lastModifiedAt: (rawNode.lastModifiedAt as string | undefined) ?? new Date().toISOString(),
+  } as CanvasNode;
 }
 
 export function terminalConnectionToReactFlowEdge(
@@ -135,7 +156,13 @@ export function terminalConnectionToReactFlowEdge(
     source: terminalNodeIdByContentId.get(conn.terminalIdA) ?? conn.terminalIdA,
     target: terminalNodeIdByContentId.get(conn.terminalIdB) ?? conn.terminalIdB,
     type: "default",
-    data: { createdAt: conn.createdAt, ropePoints: conn.ropePoints, connectionType: "terminal" },
+    data: {
+      ...(conn as unknown as Record<string, unknown>),
+      createdAt: conn.createdAt,
+      ropePoints: conn.ropePoints,
+      connectionType: "terminal",
+      _rawConnection: conn,
+    },
   };
 }
 
@@ -144,13 +171,15 @@ export function reactFlowEdgeToTerminalConnection(
   terminalContentIdByNodeId: ReadonlyMap<string, string> = new Map(),
 ): TerminalConnection {
   const data = (edge.data || {}) as Record<string, unknown>;
+  const rawConn = (data._rawConnection ?? {}) as Record<string, unknown>;
   return {
+    ...rawConn,
     id: edge.id,
     createdAt: typeof data.createdAt === "string" ? data.createdAt : new Date().toISOString(),
     terminalIdA: terminalContentIdByNodeId.get(edge.source) ?? edge.source,
     terminalIdB: terminalContentIdByNodeId.get(edge.target) ?? edge.target,
-    ropePoints: Array.isArray(data.ropePoints) ? data.ropePoints as number[][] : [],
-  };
+    ropePoints: Array.isArray(data.ropePoints) ? (data.ropePoints as number[][]) : [],
+  } as TerminalConnection;
 }
 
 function connectionEdge(
@@ -160,15 +189,30 @@ function connectionEdge(
   createdAt: string,
   ropePoints: number[][],
   connectionType: WorkspaceConnectionType,
+  rawConnection?: unknown,
 ): ReactFlowEdge {
-  return { id, source, target, type: "default", data: { createdAt, ropePoints, connectionType } };
+  return {
+    id,
+    source,
+    target,
+    type: "default",
+    data: {
+      ...(rawConnection as Record<string, unknown> | undefined),
+      createdAt,
+      ropePoints,
+      connectionType,
+      _rawConnection: rawConnection,
+    },
+  };
 }
 
-function edgeMetadata(edge: ReactFlowEdge): { createdAt: string; ropePoints: number[][] } {
+function edgeMetadata(edge: ReactFlowEdge): Record<string, unknown> {
   const data = (edge.data || {}) as Record<string, unknown>;
+  const rawConn = (data._rawConnection ?? {}) as Record<string, unknown>;
   return {
+    ...rawConn,
     createdAt: typeof data.createdAt === "string" ? data.createdAt : new Date().toISOString(),
-    ropePoints: Array.isArray(data.ropePoints) ? data.ropePoints as number[][] : [],
+    ropePoints: Array.isArray(data.ropePoints) ? (data.ropePoints as number[][]) : [],
   };
 }
 
@@ -202,6 +246,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         connection.createdAt,
         connection.ropePoints,
         "terminal-note",
+        connection,
       )),
       ...doc.payload.portalConnections.map((connection: PortalConnection) => connectionEdge(
         connection.id,
@@ -210,14 +255,15 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         connection.createdAt,
         connection.ropePoints,
         "terminal-portal",
+        connection,
       )),
       ...doc.payload.noteToNoteConnections.map((connection: NoteToNoteConnection) => connectionEdge(
         connection.id, connection.noteNodeIdA, connection.noteNodeIdB,
-        connection.createdAt, connection.ropePoints, "note-note",
+        connection.createdAt, connection.ropePoints, "note-note", connection,
       )),
       ...doc.payload.portalToPortalConnections.map((connection: PortalToPortalConnection) => connectionEdge(
         connection.id, connection.portalIdA, connection.portalIdB,
-        connection.createdAt, connection.ropePoints, "portal-portal",
+        connection.createdAt, connection.ropePoints, "portal-portal", connection,
       )),
     ];
     set({
@@ -255,14 +301,14 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         const { terminalNodeId, otherNodeId } = terminalAndOtherNodeIds(edge, nodeTypeById);
         const terminalId = terminalContentIdByNodeId.get(terminalNodeId) ?? terminalNodeId;
         if (connectionType === "terminal-note") {
-          noteConnections.push({ id: edge.id, terminalId, noteNodeId: otherNodeId, ...metadata });
+          noteConnections.push({ ...metadata, id: edge.id, terminalId, noteNodeId: otherNodeId } as NoteConnection);
         } else {
-          portalConnections.push({ id: edge.id, terminalId, portalNodeId: otherNodeId, ...metadata });
+          portalConnections.push({ ...metadata, id: edge.id, terminalId, portalNodeId: otherNodeId } as PortalConnection);
         }
       } else if (connectionType === "note-note") {
-        noteToNoteConnections.push({ id: edge.id, noteNodeIdA: edge.source, noteNodeIdB: edge.target, ...metadata });
+        noteToNoteConnections.push({ ...metadata, id: edge.id, noteNodeIdA: edge.source, noteNodeIdB: edge.target } as NoteToNoteConnection);
       } else if (connectionType === "portal-portal") {
-        portalToPortalConnections.push({ id: edge.id, portalIdA: edge.source, portalIdB: edge.target, ...metadata });
+        portalToPortalConnections.push({ ...metadata, id: edge.id, portalIdA: edge.source, portalIdB: edge.target } as PortalToPortalConnection);
       }
     }
 
@@ -285,6 +331,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
           floors: [], drawings: [], createdAt: now, lastModifiedAt: now,
         };
     return {
+      ...currentDocument,
       schemaVersion: currentDocument?.schemaVersion ?? SCHEMA_VERSION,
       type: "workspace",
       payload: {
@@ -295,6 +342,9 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         portalConnections,
         noteToNoteConnections,
         portalToPortalConnections,
+        crossFloorConnections: basePayload.crossFloorConnections ?? [],
+        floors: basePayload.floors ?? [],
+        drawings: basePayload.drawings ?? [],
         lastModifiedAt: now,
       },
     };

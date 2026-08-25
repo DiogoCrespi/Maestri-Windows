@@ -74,4 +74,77 @@ describe("Workspace Model & Persistence Schema", () => {
     expect(doc.payload.icon).toBe("folder");
     expect(doc.payload.isPinned).toBe(false);
   });
+
+  it("parses macOS v2 golden fixture with all 8 node types, 6 connection types, floors, drawings, and unknown fields", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_golden_workspace.json");
+    const doc = parseWorkspaceDocument(goldenFixture.default);
+
+    expect(doc.schemaVersion).toBe(2);
+    expect(doc.type).toBe("workspace");
+    expect((doc as unknown as Record<string, unknown>).customDocumentMeta).toBe("macOS-v2-golden-root-meta");
+    expect((doc.payload as unknown as Record<string, unknown>).customPayloadMeta).toEqual({
+      engine: "swift-codable-v2",
+      experimentalFlag: true,
+    });
+
+    // 12 nodes
+    expect(doc.payload.nodes).toHaveLength(12);
+
+    // Node content variant verification
+    const contentVariants = doc.payload.nodes.map((node) => Object.keys(node.content)[0]);
+    expect(contentVariants).toEqual([
+      "terminal",
+      "terminal",
+      "stickyNote",
+      "stickyNote",
+      "portal",
+      "portal",
+      "fileTree",
+      "text",
+      "shape",
+      "stroke",
+      "freehand",
+      "text",
+    ]);
+
+    // Unknown field preservation on node & content
+    const termNode = doc.payload.nodes[0];
+    expect((termNode as unknown as Record<string, unknown>).customNodeMeta).toBe("term-node-attr");
+    if ("terminal" in termNode.content) {
+      expect((termNode.content.terminal._0 as unknown as Record<string, unknown>).customTerminalField).toBe("agent-extra");
+    }
+
+    // Legacy node missing optional fields defaults
+    const legacyNode = doc.payload.nodes[11];
+    expect(legacyNode.zIndex).toBe(0);
+    expect(legacyNode.isLocked).toBe(false);
+    expect(legacyNode.lastModifiedAt).toBeDefined();
+
+    // 6 Connection types verification
+    expect(doc.payload.connections).toHaveLength(1);
+    expect(doc.payload.noteConnections).toHaveLength(1);
+    expect(doc.payload.portalConnections).toHaveLength(1);
+    expect(doc.payload.portalToPortalConnections).toHaveLength(1);
+    expect(doc.payload.noteToNoteConnections).toHaveLength(1);
+    expect(doc.payload.crossFloorConnections).toHaveLength(1);
+
+    expect((doc.payload.connections[0] as unknown as Record<string, unknown>).customConnAttr).toBe("t2t-rope");
+    expect((doc.payload.crossFloorConnections[0] as unknown as Record<string, unknown>).customCrossFloorMeta).toBe("floor-bridge");
+
+    // Floors & Drawings
+    expect(doc.payload.floors).toHaveLength(1);
+    expect((doc.payload.floors[0] as unknown as Record<string, unknown>).customFloorAttr).toBe("floor-extra");
+    expect(doc.payload.drawings).toHaveLength(1);
+    expect((doc.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
+  });
+
+  it("performs complete Mac -> Windows -> Mac JSON round-trip on golden fixture without data loss", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_golden_workspace.json");
+    const originalDoc = parseWorkspaceDocument(goldenFixture.default);
+    const serializedJson = JSON.stringify(originalDoc);
+    const reParsedDoc = parseWorkspaceDocument(JSON.parse(serializedJson));
+
+    expect(reParsedDoc).toEqual(originalDoc);
+  });
 });
+

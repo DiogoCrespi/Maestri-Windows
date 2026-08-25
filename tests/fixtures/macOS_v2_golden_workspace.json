@@ -1,0 +1,474 @@
+{
+  "_originDescription": "Self-contained golden fixture originating from Maestri macOS v2 persistence schema specification (Sources/Workspace/Models).",
+  "schemaVersion": 2,
+  "type": "workspace",
+  "customDocumentMeta": "macOS-v2-golden-root-meta",
+  "payload": {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "name": "macOS v2 Golden Compatibility Workspace",
+    "icon": "folder",
+    "isPinned": true,
+    "locationType": "local",
+    "workingDirectory": "/Users/maestri/projects/open-maestri",
+    "preferredIDE": "cursor",
+    "syncConfigFiles": true,
+    "canvasOrigin": {
+      "x": 9800.5,
+      "y": 8500.25
+    },
+    "canvasZoom": 1.25,
+    "customPayloadMeta": {
+      "engine": "swift-codable-v2",
+      "experimentalFlag": true
+    },
+    "createdAt": "2026-05-16T10:20:30.123Z",
+    "lastOpenedAt": "2026-05-16T12:00:00.000Z",
+    "lastModifiedAt": "2026-05-16T12:30:00.000Z",
+    "nodes": [
+      {
+        "id": "canvas-node-terminal-1",
+        "frame": [
+          [100.5, 200.5],
+          [600.0, 400.0]
+        ],
+        "zIndex": 10,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:20:30.123Z",
+        "lastModifiedAt": "2026-05-16T10:25:00.000Z",
+        "customNodeMeta": "term-node-attr",
+        "content": {
+          "terminal": {
+            "_0": {
+              "id": "terminal-content-uuid-1",
+              "agentType": "claude_code",
+              "command": "claude",
+              "name": "Primary Terminal Agent",
+              "icon": "terminal",
+              "color": "#007AFF",
+              "shellPath": "/bin/zsh",
+              "workingDirectory": "/Users/maestri/projects/open-maestri",
+              "status": "running",
+              "isManager": true,
+              "monitorWithOmbro": false,
+              "autoScrollLocked": false,
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "assignedRoleId": "role-uuid-9999",
+              "scrollbackFile": "/tmp/scrollback.log",
+              "scrollbackLineCount": 1500,
+              "lastActiveAt": "2026-05-16T11:00:00.000Z",
+              "themeId": "dark",
+              "fontFamily": "Fira Code",
+              "fontSize": 14,
+              "customTerminalField": "agent-extra"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-terminal-2",
+        "frame": [
+          [800.0, 200.0],
+          [600.0, 400.0]
+        ],
+        "zIndex": 5,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:21:00.123Z",
+        "lastModifiedAt": "2026-05-16T10:26:00.000Z",
+        "content": {
+          "terminal": {
+            "_0": {
+              "id": "terminal-content-uuid-2",
+              "agentType": "codex",
+              "command": "codex",
+              "name": "Secondary Terminal Agent",
+              "icon": "terminal",
+              "color": "#34C759",
+              "shellPath": "/bin/zsh",
+              "workingDirectory": "/Users/maestri/projects/open-maestri",
+              "status": "idle",
+              "isManager": false,
+              "monitorWithOmbro": true,
+              "autoScrollLocked": true,
+              "shortcutMode": {
+                "kind": "cmd1"
+              },
+              "scrollbackLineCount": 200
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-note-1",
+        "frame": [
+          [150.0, 650.0],
+          [300.0, 250.0]
+        ],
+        "zIndex": 2,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:22:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:27:00.000Z",
+        "content": {
+          "stickyNote": {
+            "_0": {
+              "color": "#FEFDE8",
+              "fileName": "architecture-notes.md",
+              "fontSize": 16,
+              "hasCustomName": true,
+              "isPreviewing": true,
+              "storageMode": {
+                "managed": {}
+              },
+              "customNoteAttr": "yellow-sticky"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-note-2",
+        "frame": [
+          [500.0, 650.0],
+          [300.0, 250.0]
+        ],
+        "zIndex": 3,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:22:30.000Z",
+        "lastModifiedAt": "2026-05-16T10:27:30.000Z",
+        "content": {
+          "stickyNote": {
+            "_0": {
+              "color": "blue",
+              "fileName": "custom-path-note.md",
+              "fontSize": 14,
+              "hasCustomName": false,
+              "isPreviewing": false,
+              "storageMode": {
+                "custom": {
+                  "_0": "/Users/maestri/notes/custom.md"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-portal-1",
+        "frame": [
+          [900.0, 650.0],
+          [500.0, 350.0]
+        ],
+        "zIndex": 1,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:23:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:28:00.000Z",
+        "content": {
+          "portal": {
+            "_0": {
+              "id": "portal-content-uuid-1",
+              "name": "Documentation Portal",
+              "currentURL": "https://docs.maestri.dev",
+              "source": {
+                "url": {
+                  "_0": "https://docs.maestri.dev"
+                }
+              },
+              "status": "idle",
+              "chromeHidden": false,
+              "storageScope": "isolated"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-portal-2",
+        "frame": [
+          [1450.0, 650.0],
+          [500.0, 350.0]
+        ],
+        "zIndex": 1,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:23:30.000Z",
+        "lastModifiedAt": "2026-05-16T10:28:30.000Z",
+        "content": {
+          "portal": {
+            "_0": {
+              "id": "portal-content-uuid-2",
+              "name": "Dashboard Portal",
+              "currentURL": "https://dashboard.maestri.dev",
+              "source": {
+                "none": {}
+              },
+              "status": "loading",
+              "chromeHidden": true,
+              "storageScope": "shared"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-filetree-1",
+        "frame": [
+          [100.0, 1050.0],
+          [400.0, 500.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:24:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:29:00.000Z",
+        "content": {
+          "fileTree": {
+            "_0": {
+              "name": "Project Root Tree",
+              "rootPath": "/Users/maestri/projects/open-maestri",
+              "viewMode": "list"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-text-1",
+        "frame": [
+          [550.0, 1050.0],
+          [300.0, 100.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:24:30.000Z",
+        "lastModifiedAt": "2026-05-16T10:29:30.000Z",
+        "content": {
+          "text": {
+            "_0": {
+              "text": "Architecture Overview",
+              "fontSize": 24,
+              "fontWeight": "bold",
+              "color": "#1A1A1A",
+              "alignment": "left",
+              "fontFamily": "sans"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-shape-1",
+        "frame": [
+          [900.0, 1050.0],
+          [200.0, 200.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:25:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:30:00.000Z",
+        "content": {
+          "shape": {
+            "_0": {
+              "shapeType": "diamond",
+              "fillColor": "#FF9500",
+              "strokeColor": "#CC7A00",
+              "strokeWidth": 3.0,
+              "strokeStyle": "dashed",
+              "fillStyle": "solid",
+              "text": "Decision Node",
+              "fontSize": 14,
+              "rotation": 45.0
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-stroke-1",
+        "frame": [
+          [1150.0, 1050.0],
+          [250.0, 150.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:25:30.000Z",
+        "lastModifiedAt": "2026-05-16T10:30:30.000Z",
+        "content": {
+          "stroke": {
+            "_0": {
+              "strokeType": "arrow",
+              "startPoint": {
+                "x": 0.0,
+                "y": 0.5
+              },
+              "endPoint": {
+                "x": 1.0,
+                "y": 0.5
+              },
+              "controlPoint": {
+                "x": 0.5,
+                "y": 0.2
+              },
+              "strokeColor": "#FF3B30",
+              "strokeWidth": 2.5,
+              "strokeStyle": "solid"
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-freehand-1",
+        "frame": [
+          [1450.0, 1050.0],
+          [300.0, 300.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:26:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:31:00.000Z",
+        "content": {
+          "freehand": {
+            "_0": {
+              "freehandType": "highlighter",
+              "points": [
+                {
+                  "x": 0.1,
+                  "y": 0.1
+                },
+                {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                {
+                  "x": 0.9,
+                  "y": 0.9
+                }
+              ],
+              "strokeColor": "#FFCC00",
+              "strokeWidth": 12.0,
+              "opacity": 0.4,
+              "rotation": 0.0
+            }
+          }
+        }
+      },
+      {
+        "id": "canvas-node-legacy-1",
+        "frame": [
+          [50.0, 50.0],
+          [200.0, 100.0]
+        ],
+        "createdAt": "2026-05-16T10:00:00.000Z",
+        "content": {
+          "text": {
+            "_0": {
+              "text": "Legacy Label",
+              "fontSize": 12,
+              "fontWeight": "regular",
+              "color": "#000000",
+              "alignment": "center",
+              "fontFamily": "mono"
+            }
+          }
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-term-to-term-1",
+        "createdAt": "2026-05-16T10:30:00.000Z",
+        "terminalIdA": "terminal-content-uuid-1",
+        "terminalIdB": "terminal-content-uuid-2",
+        "ropePoints": [
+          [100.0, 200.0],
+          [450.0, 300.0],
+          [800.0, 200.0]
+        ],
+        "customConnAttr": "t2t-rope"
+      }
+    ],
+    "noteConnections": [
+      {
+        "id": "conn-term-to-note-1",
+        "createdAt": "2026-05-16T10:31:00.000Z",
+        "terminalId": "terminal-content-uuid-1",
+        "noteNodeId": "canvas-node-note-1",
+        "ropePoints": [
+          [100.0, 400.0],
+          [150.0, 650.0]
+        ]
+      }
+    ],
+    "portalConnections": [
+      {
+        "id": "conn-term-to-portal-1",
+        "createdAt": "2026-05-16T10:32:00.000Z",
+        "terminalId": "terminal-content-uuid-1",
+        "portalNodeId": "canvas-node-portal-1",
+        "ropePoints": [
+          [600.0, 400.0],
+          [900.0, 650.0]
+        ]
+      }
+    ],
+    "portalToPortalConnections": [
+      {
+        "id": "conn-portal-to-portal-1",
+        "createdAt": "2026-05-16T10:33:00.000Z",
+        "portalIdA": "canvas-node-portal-1",
+        "portalIdB": "canvas-node-portal-2",
+        "ropePoints": [
+          [1400.0, 800.0],
+          [1450.0, 800.0]
+        ]
+      }
+    ],
+    "noteToNoteConnections": [
+      {
+        "id": "conn-note-to-note-1",
+        "createdAt": "2026-05-16T10:34:00.000Z",
+        "noteNodeIdA": "canvas-node-note-1",
+        "noteNodeIdB": "canvas-node-note-2",
+        "ropePoints": [
+          [450.0, 775.0],
+          [500.0, 775.0]
+        ]
+      }
+    ],
+    "crossFloorConnections": [
+      {
+        "id": "conn-cross-floor-1",
+        "createdAt": "2026-05-16T10:35:00.000Z",
+        "nodeIdA": "canvas-node-terminal-1",
+        "floorIdA": null,
+        "nodeIdB": "canvas-node-terminal-2",
+        "floorIdB": "floor-uuid-200",
+        "ropePoints": [
+          [300.0, 200.0],
+          [800.0, 200.0]
+        ],
+        "customCrossFloorMeta": "floor-bridge"
+      }
+    ],
+    "floors": [
+      {
+        "id": "floor-uuid-200",
+        "name": "Feature Branch Floor",
+        "branchName": "feat/mac-win-compat",
+        "worktreePath": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
+        "hooks": {
+          "onEnter": "git status",
+          "onLeave": "echo bye"
+        },
+        "createdAt": "2026-05-16T10:15:00.000Z",
+        "customFloorAttr": "floor-extra"
+      }
+    ],
+    "drawings": [
+      {
+        "id": "drawing-uuid-300",
+        "points": [
+          [10.0, 10.0],
+          [50.0, 50.0],
+          [100.0, 20.0]
+        ],
+        "color": "#FF2D55",
+        "lineWidth": 4.0,
+        "createdAt": "2026-05-16T10:16:00.000Z",
+        "customDrawingAttr": "hand-drawn-circle"
+      }
+    ]
+  }
+}

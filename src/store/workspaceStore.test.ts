@@ -239,4 +239,60 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(state.currentDocument?.payload.canvasZoom).toBe(1.35);
     expect(state.serializeWorkspace().payload.canvasZoom).toBe(1.35);
   });
+
+  it("loads golden fixture into workspaceStore, converts all 12 nodes & 6 connection types, and serializes back with 100% data preservation", async () => {
+    const goldenFixture = await import("../../tests/fixtures/macOS_v2_golden_workspace.json");
+    const store = useWorkspaceStore.getState();
+
+    store.loadWorkspace(goldenFixture.default);
+    const loadedState = useWorkspaceStore.getState();
+
+    expect(loadedState.nodes).toHaveLength(12);
+    // 1 terminal connection + 4 heterogeneous connections loaded as React Flow edges = 5 edges
+    expect(loadedState.edges).toHaveLength(5);
+    expect(loadedState.isDirty).toBe(false);
+
+    // Modify a node position (simulating user dragging a node)
+    store.updateNodePosition("canvas-node-terminal-1", { x: 250.5, y: 350.5 });
+    expect(useWorkspaceStore.getState().isDirty).toBe(true);
+
+    const serialized = store.serializeWorkspace();
+
+    // Validate root unknown fields
+    expect((serialized as unknown as Record<string, unknown>).customDocumentMeta).toBe("macOS-v2-golden-root-meta");
+
+    // Validate payload unknown fields
+    expect((serialized.payload as unknown as Record<string, unknown>).customPayloadMeta).toEqual({
+      engine: "swift-codable-v2",
+      experimentalFlag: true,
+    });
+
+    // Validate node unknown field & updated position
+    const serializedTermNode = serialized.payload.nodes.find((n) => n.id === "canvas-node-terminal-1");
+    expect(serializedTermNode).toBeDefined();
+    expect(serializedTermNode?.frame).toEqual([[250.5, 350.5], [600, 400]]);
+    expect((serializedTermNode as unknown as Record<string, unknown>).customNodeMeta).toBe("term-node-attr");
+    if (serializedTermNode && "terminal" in serializedTermNode.content) {
+      expect((serializedTermNode.content.terminal._0 as unknown as Record<string, unknown>).customTerminalField).toBe("agent-extra");
+    }
+
+    // Validate all 6 connection types preserved
+    expect(serialized.payload.connections).toHaveLength(1);
+    expect(serialized.payload.noteConnections).toHaveLength(1);
+    expect(serialized.payload.portalConnections).toHaveLength(1);
+    expect(serialized.payload.portalToPortalConnections).toHaveLength(1);
+    expect(serialized.payload.noteToNoteConnections).toHaveLength(1);
+    expect(serialized.payload.crossFloorConnections).toHaveLength(1);
+
+    expect((serialized.payload.connections[0] as unknown as Record<string, unknown>).customConnAttr).toBe("t2t-rope");
+    expect((serialized.payload.crossFloorConnections[0] as unknown as Record<string, unknown>).customCrossFloorMeta).toBe("floor-bridge");
+
+    // Validate floors & drawings preserved
+    expect(serialized.payload.floors).toHaveLength(1);
+    expect((serialized.payload.floors[0] as unknown as Record<string, unknown>).customFloorAttr).toBe("floor-extra");
+
+    expect(serialized.payload.drawings).toHaveLength(1);
+    expect((serialized.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
+  });
 });
+

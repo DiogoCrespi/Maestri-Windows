@@ -6,6 +6,11 @@ dist/
 .vscode/
 *.tsbuildinfo
 test-results/
+powershell.exe
+powershell.cmd
+**/powershell.exe
+**/powershell.cmd
+
 
 
 
