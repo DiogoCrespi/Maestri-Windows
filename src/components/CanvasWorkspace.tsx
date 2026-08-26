@@ -28,6 +28,14 @@ import type {
 } from "../model/workspace";
 import { desktopBridge } from "../lib/desktopBridge";
 import { classifyConnectionType, useWorkspaceStore } from "../store/workspaceStore";
+import {
+  useFloorManager,
+  FloorOverviewPanel,
+  CreateFloorDialog,
+  FloorHooksEditor,
+  DeleteFloorDialog,
+  FloorLandingDialog,
+} from "./floors";
 import { resolveWorkspaceWorkingDirectory, workspaceFallbackDirectory } from "../lib/workingDirectory";
 
 import { useMaestroController } from "../hooks/useMaestroController";
@@ -572,6 +580,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     () => nodes.find((node) => node.type === "terminal" && node.selected),
     [nodes],
   );
+  const floorMgr = useFloorManager(workspaceDirectory);
   const routineTerminals = useMemo<RoutineTerminalOption[]>(() => nodes.flatMap((node) => {
     if (node.type !== "terminal") return [];
     const content = (node.data as { content?: TerminalContent }).content;
@@ -1015,6 +1024,10 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
         }
       }
       const modified = event.metaKey || event.ctrlKey;
+      if (modified && event.shiftKey && (event.key === "\\" || event.code === "Backslash")) {
+        event.preventDefault();
+        floorMgr.setIsOverviewOpen((prev) => !prev);
+      }
       if (event.key === "Control" || event.key === "Meta") setShowJumpBadges(true);
       if (modified && event.key >= "1" && event.key <= "9") {
         const targetId = [...jumpMap].find(([, number]) => number === Number(event.key))?.[0];
@@ -1046,7 +1059,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     return () => { window.removeEventListener("keydown", handleKeyDown); window.removeEventListener("keyup", handleKeyUp); };
-  }, [cancelFreehandDrawing, drawingPoints, duplicateSelectedNode, edges, getZoom, jumpMap, nodes, setCenter, setEdges, setNodes, setViewport]);
+  }, [cancelFreehandDrawing, drawingPoints, duplicateSelectedNode, edges, floorMgr, getZoom, jumpMap, nodes, setCenter, setEdges, setNodes, setViewport]);
 
   return (
     <div
@@ -1237,8 +1250,80 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 11-6 6v3h3l6-6"></path><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"></path></svg>
           </button>
+
+          <button
+            type="button"
+            className={`canvas-action-btn icon-btn ${floorMgr.isOverviewOpen ? "active" : ""}`}
+            onClick={() => floorMgr.setIsOverviewOpen((prev) => !prev)}
+            aria-label="Gerenciar Work Floors"
+            title="Work Floors (Ctrl+Shift+\)"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="9" y1="6" x2="15" y2="6"></line><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="15" y2="14"></line><line x1="9" y1="18" x2="15" y2="18"></line></svg>
+          </button>
         </div>
       </div>
+
+      <FloorOverviewPanel
+        isOpen={floorMgr.isOverviewOpen}
+        floors={floorMgr.floors}
+        groundBranch={floorMgr.groundBranch}
+        selectedFloorId={floorMgr.selectedFloorId}
+        isLoading={floorMgr.isLoading}
+        errorMessage={floorMgr.errorMessage}
+        onSelectFloor={floorMgr.setSelectedFloorId}
+        onCreateFloorClick={() => floorMgr.setIsCreateOpen(true)}
+        onConfigureHooksClick={(floor) => floorMgr.setHooksFloor(floor)}
+        onLandFloorClick={(floor) => void floorMgr.handleOpenLanding(floor)}
+        onDeleteFloorClick={(floor) => floorMgr.setDeleteFloorTarget(floor)}
+        onClose={() => floorMgr.setIsOverviewOpen(false)}
+      />
+
+      <CreateFloorDialog
+        isOpen={floorMgr.isCreateOpen}
+        isSubmitting={floorMgr.isLoading}
+        error={floorMgr.errorMessage}
+        onSubmit={(input) => void floorMgr.handleCreateFloor(input)}
+        onCancel={() => floorMgr.setIsCreateOpen(false)}
+      />
+
+      {floorMgr.hooksFloor && (
+        <FloorHooksEditor
+          isOpen={Boolean(floorMgr.hooksFloor)}
+          floorName={floorMgr.hooksFloor.name}
+          initialHooks={floorMgr.hooksFloor.hooks}
+          isSubmitting={floorMgr.isLoading}
+          error={floorMgr.errorMessage}
+          onSave={(hooks) => void floorMgr.handleSaveHooks(floorMgr.hooksFloor!.id, hooks)}
+          onRunHook={(phase) => void floorMgr.handleRunHooks(floorMgr.hooksFloor!, phase)}
+          onCancel={() => floorMgr.setHooksFloor(null)}
+        />
+      )}
+
+      {floorMgr.deleteFloorTarget && (
+        <DeleteFloorDialog
+          isOpen={Boolean(floorMgr.deleteFloorTarget)}
+          floor={floorMgr.deleteFloorTarget}
+          isSubmitting={floorMgr.isLoading}
+          error={floorMgr.errorMessage}
+          onConfirm={(input) => void floorMgr.handleDeleteFloor(input)}
+          onCancel={() => floorMgr.setDeleteFloorTarget(null)}
+        />
+      )}
+
+      {floorMgr.landingFloorTarget && (
+        <FloorLandingDialog
+          isOpen={Boolean(floorMgr.landingFloorTarget)}
+          floor={floorMgr.landingFloorTarget}
+          groundBranch={floorMgr.groundBranch}
+          diffText={floorMgr.landingDiffText}
+          isLoadingDiff={floorMgr.isLoadingDiff}
+          isLanding={floorMgr.isLoading}
+          error={floorMgr.errorMessage}
+          isSuccess={floorMgr.landingSuccess}
+          onLand={(input) => void floorMgr.handleLandFloor(input)}
+          onCancel={() => floorMgr.setLandingFloorTarget(null)}
+        />
+      )}
       <PreferencesPanel
         isOpen={showPreferencesPanel}
         onClose={() => setShowPreferencesPanel(false)}

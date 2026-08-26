@@ -339,4 +339,43 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(updatedNode?.lastModifiedAt).not.toBe(oldLastModifiedAt);
     expect(new Date(updatedNode!.lastModifiedAt).getTime()).toBeGreaterThan(new Date(oldLastModifiedAt).getTime());
   });
+
+  it("manages floor entries in workspaceStore payload without touching nodes", () => {
+    useWorkspaceStore.getState().loadWorkspace(testWorkspaceFixture);
+    const initialFloors = useWorkspaceStore.getState().currentDocument?.payload.floors ?? [];
+    expect(initialFloors).toEqual([]);
+
+    const newFloor = {
+      id: "floor-test-1",
+      name: "Feature Test",
+      branchName: "feat/test",
+      worktreePath: "C:\\Nestjs\\open-maestri\\.worktrees\\win-floor-test",
+      hooks: { setup: ["npm install"], run: [], teardown: [], autoRunSetup: true },
+      createdAt: "2026-08-26T00:00:00.000Z",
+    };
+
+    useWorkspaceStore.getState().addFloorEntry(newFloor);
+    expect(useWorkspaceStore.getState().isDirty).toBe(true);
+    let docFloors = useWorkspaceStore.getState().currentDocument?.payload.floors;
+    expect(docFloors).toHaveLength(1);
+    expect(docFloors?.[0].id).toBe("floor-test-1");
+
+    useWorkspaceStore.getState().updateFloorHooks("floor-test-1", {
+      setup: ["npm install", "npm run build"],
+      run: ["npm test"],
+      teardown: [],
+      autoRunSetup: false,
+    });
+    docFloors = useWorkspaceStore.getState().currentDocument?.payload.floors;
+    expect(docFloors?.[0].hooks).toEqual({
+      setup: ["npm install", "npm run build"],
+      run: ["npm test"],
+      teardown: [],
+      autoRunSetup: false,
+    });
+
+    useWorkspaceStore.getState().removeFloorEntry("floor-test-1");
+    docFloors = useWorkspaceStore.getState().currentDocument?.payload.floors;
+    expect(docFloors).toHaveLength(0);
+  });
 });
