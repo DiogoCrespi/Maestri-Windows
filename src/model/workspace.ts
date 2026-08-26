@@ -317,8 +317,6 @@ export function parseWorkspaceDocument(input: unknown): WorkspaceDocument {
       if (typeof conn !== "object" || conn === null) return conn;
       return {
         ...conn,
-        floorIdA: conn.floorIdA ?? null,
-        floorIdB: conn.floorIdB ?? null,
         ropePoints: Array.isArray(conn.ropePoints) ? conn.ropePoints : [],
       };
     });
@@ -332,9 +330,15 @@ export function parseWorkspaceDocument(input: unknown): WorkspaceDocument {
       const rawHooks = typeof floor.hooks === "object" && floor.hooks !== null ? floor.hooks : {};
       const hooks: FloorHooks = {
         ...rawHooks,
-        setup: Array.isArray(rawHooks.setup) ? rawHooks.setup : [],
-        run: Array.isArray(rawHooks.run) ? rawHooks.run : [],
-        teardown: Array.isArray(rawHooks.teardown) ? rawHooks.teardown : [],
+        setup: Array.isArray(rawHooks.setup)
+          ? rawHooks.setup.filter((s: unknown): s is string => typeof s === "string")
+          : [],
+        run: Array.isArray(rawHooks.run)
+          ? rawHooks.run.filter((s: unknown): s is string => typeof s === "string")
+          : [],
+        teardown: Array.isArray(rawHooks.teardown)
+          ? rawHooks.teardown.filter((s: unknown): s is string => typeof s === "string")
+          : [],
         autoRunSetup: typeof rawHooks.autoRunSetup === "boolean" ? rawHooks.autoRunSetup : false,
       };
       return {

@@ -1,5 +1,5 @@
 {
-  "_originDescription": "Self-contained golden fixture originating from Maestri macOS v2 persistence schema specification (Sources/Floor/FloorManager.swift & Sources/Workspace/Models/WorkspacePayload.swift).",
+  "_originDescription": "Derived fixture originating from Maestri macOS v2 Swift source specification (Sources/Floor/FloorManager.swift & Sources/Workspace/Models/WorkspacePayload.swift).",
   "schemaVersion": 2,
   "type": "workspace",
   "customDocumentMeta": "macOS-v2-floors-root-meta",
@@ -76,7 +76,7 @@
               "icon": "terminal",
               "color": "#34C759",
               "shellPath": "/bin/zsh",
-              "workingDirectory": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
+              "workingDirectory": "/Users/maestri/projects/open-maestri/.open-maestri/floors/Feature Branch Floor",
               "status": "idle",
               "isManager": false,
               "monitorWithOmbro": false,
@@ -100,7 +100,6 @@
         "id": "50000000-0000-0000-0000-000000000006",
         "createdAt": "2026-05-16T10:35:00.000Z",
         "nodeIdA": "20000000-0000-0000-0000-000000000001",
-        "floorIdA": null,
         "nodeIdB": "20000000-0000-0000-0000-000000000002",
         "floorIdB": "60000000-0000-0000-0000-000000000001",
         "ropePoints": [
@@ -115,7 +114,7 @@
         "id": "60000000-0000-0000-0000-000000000001",
         "name": "Feature Branch Floor",
         "branchName": "feat/mac-win-compat",
-        "worktreePath": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
+        "worktreePath": "/Users/maestri/projects/open-maestri/.open-maestri/floors/Feature Branch Floor",
         "hooks": {
           "setup": ["git status", "npm install"],
           "run": ["npm test"],

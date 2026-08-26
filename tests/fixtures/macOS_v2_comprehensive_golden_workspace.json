@@ -449,11 +449,8 @@
         "branchName": "feat/mac-win-compat",
         "worktreePath": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
         "hooks": {
-          "setup": ["git status"],
-          "run": [],
-          "teardown": ["echo bye"],
-          "autoRunSetup": false,
-          "customHookAttr": "hook-extra"
+          "onEnter": "git status",
+          "onLeave": "echo bye"
         },
         "createdAt": "2026-05-16T10:15:00.000Z",
         "customFloorAttr": "floor-extra"

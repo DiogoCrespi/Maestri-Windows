@@ -212,7 +212,7 @@ describe("Workspace Model & Persistence Schema", () => {
     expect((doc.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
   });
 
-  it("parses macOS v2 floors golden fixture, validates FloorEntry, FloorHooks, CrossFloorConnection, and unknown fields", async () => {
+  it("parses macOS v2 floors derived fixture, validates FloorEntry, FloorHooks, absent floorIdA for Ground, and unknown fields", async () => {
     const floorsFixture = await import("../../tests/fixtures/macOS_v2_floors_workspace.json");
     const doc = parseWorkspaceDocument(floorsFixture.default);
 
@@ -225,13 +225,13 @@ describe("Workspace Model & Persistence Schema", () => {
     expect((doc as unknown as Record<string, unknown>).customDocumentMeta).toBe("macOS-v2-floors-root-meta");
     expect((doc.payload as unknown as Record<string, unknown>).customPayloadMeta).toEqual({ floorEngine: "swift-v2" });
 
-    // Floors validation
+    // Floors validation with exact .open-maestri/floors/<name> path
     expect(doc.payload.floors).toHaveLength(1);
     const floor = doc.payload.floors[0];
     expect(floor.id).toMatch(UUID_REGEX);
     expect(floor.name).toBe("Feature Branch Floor");
     expect(floor.branchName).toBe("feat/mac-win-compat");
-    expect(floor.worktreePath).toBe("/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat");
+    expect(floor.worktreePath).toBe("/Users/maestri/projects/open-maestri/.open-maestri/floors/Feature Branch Floor");
     expect(floor.createdAt).toBe("2026-05-16T10:15:00.000Z");
 
     // FloorHooks validation & unknown field preservation
@@ -242,12 +242,12 @@ describe("Workspace Model & Persistence Schema", () => {
     expect((floor.hooks as unknown as Record<string, unknown>).customHookMeta).toBe("extra-hook-field");
     expect((floor as unknown as Record<string, unknown>).customFloorMeta).toBe("floor-attr");
 
-    // CrossFloorConnection validation
+    // CrossFloorConnection validation: Ground Floor is represented by ABSENCE of floorIdA (undefined)
     expect(doc.payload.crossFloorConnections).toHaveLength(1);
     const crossConn = doc.payload.crossFloorConnections[0];
     expect(crossConn.id).toMatch(UUID_REGEX);
     expect(crossConn.nodeIdA).toMatch(UUID_REGEX);
-    expect(crossConn.floorIdA).toBeNull(); // Ground floor
+    expect(crossConn.floorIdA).toBeUndefined(); // Ground floor absent Optional nil
     expect(crossConn.nodeIdB).toMatch(UUID_REGEX);
     expect(crossConn.floorIdB).toBe("60000000-0000-0000-0000-000000000001");
     expect((crossConn as unknown as Record<string, unknown>).customCrossFloorMeta).toBe("floor-bridge");
@@ -258,7 +258,7 @@ describe("Workspace Model & Persistence Schema", () => {
     }
   });
 
-  it("normalizes FloorHooks defaults when missing optional fields without erasing unknown fields", () => {
+  it("normalizes FloorHooks defaults and filters string arrays when given partial or invalid inputs without erasing unknown fields", () => {
     const rawDoc = {
       schemaVersion: 2,
       type: "workspace",
@@ -277,6 +277,7 @@ describe("Workspace Model & Persistence Schema", () => {
             branchName: "main",
             worktreePath: "/tmp/partial",
             hooks: {
+              setup: ["echo hello", 123, null], // array with non-strings to filter out
               onEnter: "git status", // legacy/custom field
             },
             createdAt: "2026-01-01T00:00:00Z",
@@ -289,11 +290,20 @@ describe("Workspace Model & Persistence Schema", () => {
 
     const doc = parseWorkspaceDocument(rawDoc);
     const hooks = doc.payload.floors[0].hooks;
-    expect(hooks.setup).toEqual([]);
+    expect(hooks.setup).toEqual(["echo hello"]);
     expect(hooks.run).toEqual([]);
     expect(hooks.teardown).toEqual([]);
     expect(hooks.autoRunSetup).toBe(false);
     expect((hooks as unknown as Record<string, unknown>).onEnter).toBe("git status");
+  });
+
+  it("performs complete TypeScript parse and exact JSON round-trip on floors fixture without data loss", async () => {
+    const floorsFixture = await import("../../tests/fixtures/macOS_v2_floors_workspace.json");
+    const originalDoc = parseWorkspaceDocument(floorsFixture.default);
+    const serializedJson = JSON.stringify(originalDoc);
+    const reParsedDoc = parseWorkspaceDocument(JSON.parse(serializedJson));
+
+    expect(reParsedDoc).toEqual(originalDoc);
   });
 
   it("performs complete TypeScript parse and JSON round-trip on comprehensive golden fixture without data loss", async () => {

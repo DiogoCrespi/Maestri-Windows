@@ -331,7 +331,7 @@ describe("workspaceStore & React Flow Conversions", () => {
 
     expect(serialized.payload.crossFloorConnections).toHaveLength(1);
     const crossConn = serialized.payload.crossFloorConnections[0];
-    expect(crossConn.floorIdA).toBeNull();
+    expect(crossConn.floorIdA).toBeUndefined();
     expect(crossConn.floorIdB).toBe("60000000-0000-0000-0000-000000000001");
     expect((crossConn as unknown as Record<string, unknown>).customCrossFloorMeta).toBe("floor-bridge");
 
