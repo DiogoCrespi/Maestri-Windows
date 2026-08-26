@@ -1,5 +1,8 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { validateFrontendStorageScope, usePortalLifecycle } from "./PortalNode";
+import {
+  validateFrontendStorageScope,
+  PortalLifecycleController,
+} from "./PortalNode";
 import { desktopBridge } from "../lib/desktopBridge";
 
 describe("PortalNode storageScope canonical validation", () => {
@@ -38,7 +41,7 @@ describe("PortalNode storageScope canonical validation", () => {
   });
 });
 
-describe("usePortalLifecycle Native Registration & Cleanup Lifecycle", () => {
+describe("PortalLifecycleController Native Registration & Cleanup Lifecycle", () => {
   let portalRegisterSpy: ReturnType<typeof vi.spyOn>;
   let portalUnregisterSpy: ReturnType<typeof vi.spyOn>;
   let portalInspectSpy: ReturnType<typeof vi.spyOn>;
@@ -72,98 +75,21 @@ describe("usePortalLifecycle Native Registration & Cleanup Lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  // Test helper to simulate React hook lifecycle execution without full DOM rendering
-  function createLifecycleRunner(initialProps: {
-    portalId: string;
-    portalName: string;
-    initialUrl: string;
-    rawStorageScope: string;
-    isNative: boolean;
-  }) {
-    let props = { ...initialProps };
-    let cleanupFn: (() => void) | undefined;
-    let prevDeps: unknown[] | null = null;
-
-    const runEffect = () => {
-      const validation = validateFrontendStorageScope(props.rawStorageScope);
-      const isScopeValid = validation.isValid;
-      const validatedScope = validation.scope;
-      const scopeErrorMessage = validation.errorMessage;
-
-      const currentDeps = [
-        props.isNative,
-        props.portalId,
-        props.portalName,
-        isScopeValid,
-        validatedScope,
-        scopeErrorMessage,
-        props.rawStorageScope,
-      ];
-
-      // If dependencies changed, run previous cleanup and new effect
-      const depsChanged =
-        !prevDeps ||
-        currentDeps.some((dep, i) => !Object.is(dep, prevDeps![i]));
-
-      if (depsChanged) {
-        if (cleanupFn) {
-          cleanupFn();
-          cleanupFn = undefined;
-        }
-
-        prevDeps = currentDeps;
-
-        if (props.isNative && isScopeValid) {
-          let cancelled = false;
-          const registration = desktopBridge.portalRegister(
-            props.portalId,
-            props.portalName,
-            props.initialUrl,
-            validatedScope,
-          );
-
-          void registration.then(() => {
-            if (!cancelled) {
-              void desktopBridge.portalInspect(props.portalId);
-            }
-          });
-
-          cleanupFn = () => {
-            cancelled = true;
-            void registration.then(() => desktopBridge.portalUnregister(props.portalId));
-          };
-        }
-      }
-    };
-
-    runEffect();
-
-    return {
-      updateProps: (newProps: Partial<typeof initialProps>) => {
-        props = { ...props, ...newProps };
-        runEffect();
-      },
-      unmount: () => {
-        if (cleanupFn) {
-          cleanupFn();
-          cleanupFn = undefined;
-        }
-      },
-    };
-  }
-
-  test("mounting a portal registers EXACTLY ONCE and unmounting unregisters EXACTLY ONCE", async () => {
-    const runner = createLifecycleRunner({
-      portalId: "portal-lc-1",
+  test("mount registers EXACTLY ONCE and unmount unregisters EXACTLY ONCE", async () => {
+    const controller = new PortalLifecycleController({
+      portalId: "portal-ctrl-1",
       portalName: "Portal 1",
       initialUrl: "https://example.com",
       rawStorageScope: "isolated",
       isNative: true,
+      bridge: desktopBridge,
     });
 
+    const val = controller.mount();
+    expect(val.isValid).toBe(true);
     expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
     expect(portalRegisterSpy).toHaveBeenCalledWith(
-      "portal-lc-1",
+      "portal-ctrl-1",
       "Portal 1",
       "https://example.com",
       "isolated",
@@ -171,27 +97,29 @@ describe("usePortalLifecycle Native Registration & Cleanup Lifecycle", () => {
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
 
     // Unmount
-    runner.unmount();
+    controller.unmount();
     await Promise.resolve();
 
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(1);
-    expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-lc-1");
+    expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-ctrl-1");
   });
 
-  test("URL changes or re-renders with new URL do NOT trigger unregister or re-registration", async () => {
-    const runner = createLifecycleRunner({
-      portalId: "portal-nav-1",
+  test("updating URL or portalName does NOT trigger unregister or re-registration", async () => {
+    const controller = new PortalLifecycleController({
+      portalId: "portal-ctrl-nav",
       portalName: "Portal Nav",
       initialUrl: "https://example.com",
       rawStorageScope: "isolated",
       isNative: true,
+      bridge: desktopBridge,
     });
 
+    controller.mount();
     expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
 
-    // Update URL prop
-    runner.updateProps({ initialUrl: "https://google.com" });
+    // Update URL or portalName
+    controller.update({ initialUrl: "https://google.com", portalName: "Renamed Portal" });
     await Promise.resolve();
 
     // CRITICAL: portalRegister MUST NOT be called again, and portalUnregister MUST NOT be called!
@@ -200,44 +128,53 @@ describe("usePortalLifecycle Native Registration & Cleanup Lifecycle", () => {
   });
 
   test("changing scope valid -> invalid triggers cleanup of registered portal", async () => {
-    const runner = createLifecycleRunner({
-      portalId: "portal-scope-1",
-      portalName: "Portal Scope",
+    const controller = new PortalLifecycleController({
+      portalId: "portal-ctrl-scope-1",
+      portalName: "Portal Scope 1",
       initialUrl: "https://example.com",
       rawStorageScope: "isolated",
       isNative: true,
+      bridge: desktopBridge,
     });
 
+    controller.mount();
     expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
 
     // Transition to unsupported "shared" scope
-    runner.updateProps({ rawStorageScope: "shared" });
+    const resShared = controller.update({ rawStorageScope: "shared" });
     await Promise.resolve();
+
+    expect(resShared.isValid).toBe(false);
+    expect(resShared.errorMessage).toContain("não é suportado no runtime Windows");
 
     // Previous valid registration MUST be cleaned up with unregister
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(1);
-    expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-scope-1");
+    expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-ctrl-scope-1");
   });
 
   test("changing scope invalid -> valid registers native portal once", async () => {
-    const runner = createLifecycleRunner({
-      portalId: "portal-scope-2",
+    const controller = new PortalLifecycleController({
+      portalId: "portal-ctrl-scope-2",
       portalName: "Portal Scope 2",
       initialUrl: "https://example.com",
       rawStorageScope: "invalid_scope",
       isNative: true,
+      bridge: desktopBridge,
     });
 
+    const resInvalid = controller.mount();
+    expect(resInvalid.isValid).toBe(false);
     expect(portalRegisterSpy).toHaveBeenCalledTimes(0);
 
     // Transition to valid "isolated" scope
-    runner.updateProps({ rawStorageScope: "isolated" });
+    const resValid = controller.update({ rawStorageScope: "isolated" });
     await Promise.resolve();
 
+    expect(resValid.isValid).toBe(true);
     expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
     expect(portalRegisterSpy).toHaveBeenCalledWith(
-      "portal-scope-2",
+      "portal-ctrl-scope-2",
       "Portal Scope 2",
       "https://example.com",
       "isolated",
