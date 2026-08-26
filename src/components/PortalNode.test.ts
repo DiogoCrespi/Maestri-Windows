@@ -16,6 +16,10 @@ describe("PortalNode storageScope canonical validation", () => {
     expect(resIsolated.isValid).toBe(true);
     expect(resIsolated.scope).toBe("isolated");
     expect(resIsolated.webviewOptions).toEqual({ incognito: true });
+
+    const resWhitespace = validateFrontendStorageScope("  isolated  ");
+    expect(resWhitespace.isValid).toBe(true);
+    expect(resWhitespace.scope).toBe("isolated");
   });
 
   test("canonical 'shared' value without edge session sharing is rejected with documented gap error", () => {
@@ -99,6 +103,7 @@ describe("PortalLifecycleController Native Registration & Cleanup Lifecycle", ()
     // Unmount
     controller.unmount();
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(1);
     expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-ctrl-1");
@@ -121,10 +126,58 @@ describe("PortalLifecycleController Native Registration & Cleanup Lifecycle", ()
     // Update URL or portalName
     controller.update({ initialUrl: "https://google.com", portalName: "Renamed Portal" });
     await Promise.resolve();
+    await Promise.resolve();
 
     // CRITICAL: portalRegister MUST NOT be called again, and portalUnregister MUST NOT be called!
     expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
     expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
+  });
+
+  test("whitespace differences in rawStorageScope ('isolated' vs ' isolated ') do NOT re-register or unregister", async () => {
+    const controller = new PortalLifecycleController({
+      portalId: "portal-ctrl-whitespace",
+      portalName: "Portal Whitespace",
+      initialUrl: "https://example.com",
+      rawStorageScope: "isolated",
+      isNative: true,
+      bridge: desktopBridge,
+    });
+
+    controller.mount();
+    expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
+    expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
+
+    // Update rawStorageScope with extra whitespace
+    controller.update({ rawStorageScope: " isolated " });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
+    expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
+  });
+
+  test("changing portalId unregisters old ID and registers new ID cleanly", async () => {
+    const controller = new PortalLifecycleController({
+      portalId: "portal-id-1",
+      portalName: "Portal Identity",
+      initialUrl: "https://example.com",
+      rawStorageScope: "isolated",
+      isNative: true,
+      bridge: desktopBridge,
+    });
+
+    controller.mount();
+    expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
+    expect(portalRegisterSpy).toHaveBeenCalledWith("portal-id-1", "Portal Identity", "https://example.com", "isolated");
+
+    // Change portalId
+    controller.update({ portalId: "portal-id-2" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Old ID must be unregistered, and new ID must be registered
+    expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-id-1");
+    expect(portalRegisterSpy).toHaveBeenCalledWith("portal-id-2", "Portal Identity", "https://example.com", "isolated");
   });
 
   test("changing scope valid -> invalid triggers cleanup of registered portal", async () => {
@@ -143,6 +196,7 @@ describe("PortalLifecycleController Native Registration & Cleanup Lifecycle", ()
 
     // Transition to unsupported "shared" scope
     const resShared = controller.update({ rawStorageScope: "shared" });
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(resShared.isValid).toBe(false);
@@ -170,6 +224,7 @@ describe("PortalLifecycleController Native Registration & Cleanup Lifecycle", ()
     // Transition to valid "isolated" scope
     const resValid = controller.update({ rawStorageScope: "isolated" });
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(resValid.isValid).toBe(true);
     expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
@@ -179,5 +234,90 @@ describe("PortalLifecycleController Native Registration & Cleanup Lifecycle", ()
       "https://example.com",
       "isolated",
     );
+  });
+
+  test("portalRegister promise rejection reverses isRegistered flag and notifies error callback", async () => {
+    portalRegisterSpy.mockRejectedValueOnce(new Error("IPC Registration Failed"));
+
+    let reportedError: boolean | null = null;
+    let reportedMessage: string | null = null;
+
+    const controller = new PortalLifecycleController({
+      portalId: "portal-reject-1",
+      portalName: "Portal Reject",
+      initialUrl: "https://example.com",
+      rawStorageScope: "isolated",
+      isNative: true,
+      bridge: desktopBridge,
+      onErrorChange: (err, msg) => {
+        reportedError = err;
+        reportedMessage = msg;
+      },
+    });
+
+    controller.mount();
+
+    // Allow rejected promise microtasks to process
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.isCurrentlyRegistered()).toBe(false);
+    expect(controller.getLastError()).toBe("IPC Registration Failed");
+    expect(reportedError).toBe(true);
+    expect(reportedMessage).toBe("IPC Registration Failed");
+  });
+
+  test("unmount before portalRegister resolves unregisters cleanly after resolution", async () => {
+    let resolveRegistration!: (val: unknown) => void;
+    const pendingPromise = new Promise((resolve) => {
+      resolveRegistration = resolve;
+    });
+
+    portalRegisterSpy.mockReturnValueOnce(pendingPromise);
+
+    const controller = new PortalLifecycleController({
+      portalId: "portal-unmount-pending",
+      portalName: "Portal Pending",
+      initialUrl: "https://example.com",
+      rawStorageScope: "isolated",
+      isNative: true,
+      bridge: desktopBridge,
+    });
+
+    controller.mount();
+    expect(portalRegisterSpy).toHaveBeenCalledTimes(1);
+
+    // Unmount while registration is still pending
+    controller.unmount();
+    expect(portalUnregisterSpy).toHaveBeenCalledTimes(0);
+
+    // Now resolve registration promise
+    resolveRegistration({ id: "portal-unmount-pending" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(portalUnregisterSpy).toHaveBeenCalledWith("portal-unmount-pending");
+  });
+
+  test("unmount after portalRegister rejection handles cleanup gracefully without throwing", async () => {
+    portalRegisterSpy.mockRejectedValueOnce(new Error("IPC Fail"));
+
+    const controller = new PortalLifecycleController({
+      portalId: "portal-unmount-rejected",
+      portalName: "Portal Rejected",
+      initialUrl: "https://example.com",
+      rawStorageScope: "isolated",
+      isNative: true,
+      bridge: desktopBridge,
+    });
+
+    controller.mount();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.isCurrentlyRegistered()).toBe(false);
+
+    // Unmounting after rejection should not throw and should clean up gracefully
+    expect(() => controller.unmount()).not.toThrow();
   });
 });

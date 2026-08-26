@@ -64,6 +64,7 @@ export interface PortalLifecycleParams {
   rawStorageScope: string;
   isNative: boolean;
   bridge?: typeof desktopBridge;
+  onErrorChange?: (hasError: boolean, errorMessage: string | null) => void;
 }
 
 export class PortalLifecycleController {
@@ -73,10 +74,13 @@ export class PortalLifecycleController {
   private rawStorageScope: string;
   private isNative: boolean;
   private bridge: typeof desktopBridge;
+  private onErrorChange?: (hasError: boolean, errorMessage: string | null) => void;
 
   private isRegistered = false;
+  private currentRegisteredId: string | null = null;
   private currentScope: string | null = null;
   private registrationPromise: Promise<unknown> | null = null;
+  private lastError: string | null = null;
 
   constructor(params: PortalLifecycleParams) {
     this.portalId = params.portalId;
@@ -85,52 +89,94 @@ export class PortalLifecycleController {
     this.rawStorageScope = params.rawStorageScope;
     this.isNative = params.isNative;
     this.bridge = params.bridge ?? desktopBridge;
+    this.onErrorChange = params.onErrorChange;
   }
 
   public getValidation(): StorageScopeValidationResult {
     return validateFrontendStorageScope(this.rawStorageScope);
   }
 
+  public getLastError(): string | null {
+    return this.lastError;
+  }
+
+  public isCurrentlyRegistered(): boolean {
+    return this.isRegistered;
+  }
+
   public mount(): StorageScopeValidationResult {
     const validation = this.getValidation();
     if (!this.isNative) {
+      this.cleanupRegistration();
+      this.lastError = null;
       return validation;
     }
 
     if (!validation.isValid) {
       this.cleanupRegistration();
+      this.lastError = validation.errorMessage ?? "Escopo inválido";
+      this.onErrorChange?.(true, this.lastError);
       return validation;
     }
 
-    if (!this.isRegistered || this.currentScope !== validation.scope) {
+    if (
+      !this.isRegistered ||
+      this.currentRegisteredId !== this.portalId ||
+      this.currentScope !== validation.scope
+    ) {
       this.cleanupRegistration();
       this.isRegistered = true;
+      this.currentRegisteredId = this.portalId;
       this.currentScope = validation.scope;
+      this.lastError = null;
 
+      const pid = this.portalId;
       const reg = this.bridge.portalRegister(
-        this.portalId,
+        pid,
         this.portalName,
         this.initialUrl,
         validation.scope,
       );
+
       this.registrationPromise = reg;
 
-      void reg.then(async () => {
-        try {
-          await this.bridge.portalInspect(this.portalId);
-        } catch {
-          // ignore inspect errors
-        }
-      });
+      void reg
+        .then(async () => {
+          if (this.isRegistered && this.currentRegisteredId === pid) {
+            try {
+              await this.bridge.portalInspect(pid);
+            } catch {
+              // ignore inspect error
+            }
+          }
+        })
+        .catch((error: unknown) => {
+          if (this.currentRegisteredId === pid) {
+            this.isRegistered = false;
+            this.currentRegisteredId = null;
+            this.currentScope = null;
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this.lastError = errMsg;
+            this.onErrorChange?.(true, errMsg);
+          }
+        });
     }
 
     return validation;
   }
 
   public update(params: Partial<PortalLifecycleParams>): StorageScopeValidationResult {
+    const idChanged = params.portalId !== undefined && params.portalId !== this.portalId;
+
+    if (params.portalId !== undefined) this.portalId = params.portalId;
     if (params.portalName !== undefined) this.portalName = params.portalName;
     if (params.rawStorageScope !== undefined) this.rawStorageScope = params.rawStorageScope;
     if (params.isNative !== undefined) this.isNative = params.isNative;
+    if (params.onErrorChange !== undefined) this.onErrorChange = params.onErrorChange;
+
+    if (idChanged && this.isRegistered) {
+      this.cleanupRegistration();
+    }
 
     return this.mount();
   }
@@ -140,17 +186,21 @@ export class PortalLifecycleController {
   }
 
   private cleanupRegistration(): void {
-    if (this.isRegistered) {
+    if (this.isRegistered || this.currentRegisteredId !== null) {
+      const pidToUnregister = this.currentRegisteredId || this.portalId;
       this.isRegistered = false;
+      this.currentRegisteredId = null;
       this.currentScope = null;
-      const pid = this.portalId;
       const p = this.registrationPromise;
       this.registrationPromise = null;
 
       if (p) {
-        void p.then(() => this.bridge.portalUnregister(pid)).catch(() => undefined);
+        void p
+          .catch(() => undefined)
+          .then(() => this.bridge.portalUnregister(pidToUnregister))
+          .catch(() => undefined);
       } else {
-        void this.bridge.portalUnregister(pid).catch(() => undefined);
+        void this.bridge.portalUnregister(pidToUnregister).catch(() => undefined);
       }
     }
   }
@@ -163,6 +213,11 @@ export function usePortalLifecycle({
   rawStorageScope,
   isNative,
 }: PortalLifecycleParams) {
+  const validation = useMemo(() => validateFrontendStorageScope(rawStorageScope), [rawStorageScope]);
+
+  const [hasError, setHasError] = useState(!validation.isValid);
+  const [errorMessage, setErrorMessage] = useState<string | null>(validation.errorMessage ?? null);
+
   const controllerRef = useRef<PortalLifecycleController | null>(null);
 
   if (!controllerRef.current) {
@@ -172,24 +227,34 @@ export function usePortalLifecycle({
       initialUrl,
       rawStorageScope,
       isNative,
+      onErrorChange: (err, msg) => {
+        setHasError(err);
+        setErrorMessage(msg);
+      },
     });
   }
 
   const controller = controllerRef.current;
-  const validation = controller.getValidation();
-
-  const [hasError, setHasError] = useState(!validation.isValid);
-  const [errorMessage, setErrorMessage] = useState<string | null>(validation.errorMessage ?? null);
 
   useEffect(() => {
-    const res = controller.update({ portalName, rawStorageScope, isNative });
-    setHasError(!res.isValid);
-    setErrorMessage(res.errorMessage ?? null);
+    const res = controller.update({
+      portalId,
+      portalName,
+      rawStorageScope,
+      isNative,
+      onErrorChange: (err, msg) => {
+        setHasError(err);
+        setErrorMessage(msg);
+      },
+    });
+
+    setHasError(!res.isValid || controller.getLastError() !== null);
+    setErrorMessage(res.errorMessage ?? controller.getLastError());
 
     return () => {
       controller.unmount();
     };
-  }, [controller, portalId, rawStorageScope, isNative]);
+  }, [controller, portalId, validation.scope, validation.isValid, isNative]);
 
   return {
     controller,
@@ -273,13 +338,13 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   }, [initialUrl, isNative, portalId, isScopeValid, setHasError, setErrorMessage]);
 
   // 2. Native Webview2 View Instance Effect.
-  // Uses creationInitialUrlRef.current so external initialUrl prop changes do NOT tear down
-  // and recreate the native WebView2 instance.
+  // Dependencies depend on canonical validation values (validation.scope, validation.isValid)
+  // rather than un-trimmed rawStorageScope strings.
   useEffect(() => {
     if (!isNative || !portalBodyRef.current) return;
     if (!isScopeValid) {
       setHasError(true);
-      setErrorMessage(validation.errorMessage || `Escopo não suportado: "${rawStorageScope}"`);
+      setErrorMessage(validation.errorMessage || `Escopo não suportado: "${validation.scope}"`);
       return;
     }
 
@@ -327,7 +392,7 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         void candidate.close().catch(() => undefined);
       }
     };
-  }, [isNative, nativeLabel, isScopeValid, rawStorageScope, validation.errorMessage, incognitoOption, setHasError, setErrorMessage]);
+  }, [isNative, nativeLabel, isScopeValid, validation.scope, validation.errorMessage, incognitoOption, setHasError, setErrorMessage]);
 
   // 3. Bounds Sync Effect
   useEffect(() => {
