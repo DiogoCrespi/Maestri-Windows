@@ -96,6 +96,47 @@ fn get_git_toplevel(root_path: &Path) -> Result<PathBuf, String> {
     Ok(canonical_toplevel)
 }
 
+fn is_reparse_point_or_symlink(path: &Path) -> Result<bool, String> {
+    let meta = fs::symlink_metadata(path)
+        .map_err(|e| format!("Failed to read symlink_metadata for '{}': {e}", path.display()))?;
+
+    if meta.file_type().is_symlink() {
+        return Ok(true);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn check_ancestors_for_reparse_points(root: &Path, target: &Path) -> Result<(), String> {
+    let mut current = target.to_path_buf();
+    while current.starts_with(root) {
+        if current.exists() {
+            if is_reparse_point_or_symlink(&current)? {
+                return Err(format!(
+                    "Reparse point or symlink detected in ancestor path component: '{}'",
+                    current.display()
+                ));
+            }
+        }
+        if current == root {
+            break;
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn validate_floor_name(name: &str) -> Result<(), String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -253,8 +294,23 @@ pub fn floor_create(
     validate_branch_name(&canonical_root, branch)?;
 
     let floors_container = expected_worktree_path.parent().unwrap();
+
+    check_ancestors_for_reparse_points(&canonical_root, floors_container)?;
+
     if let Err(e) = fs::create_dir_all(floors_container) {
         return Err(format!("Failed to create floors container directory: {e}"));
+    }
+
+    let canonical_container = floors_container
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize floors container: {e}"))?;
+
+    if !canonical_container.starts_with(&canonical_root) {
+        return Err(format!(
+            "Floors container '{}' escaped confinement outside root '{}'",
+            canonical_container.display(),
+            canonical_root.display()
+        ));
     }
 
     let branch_exists = check_branch_exists(&canonical_root, branch);
@@ -269,6 +325,37 @@ pub fn floor_create(
         run_git_cmd(&canonical_root, &["worktree", "add", &worktree_path_str, branch])?;
     } else {
         run_git_cmd(&canonical_root, &["worktree", "add", "-b", branch, &worktree_path_str])?;
+    }
+
+    let confinement_check: Result<(), String> = (|| {
+        if is_reparse_point_or_symlink(&expected_worktree_path)? {
+            return Err(format!(
+                "Newly created worktree path '{}' is a reparse point or symlink",
+                expected_worktree_path.display()
+            ));
+        }
+        let canonical_worktree = expected_worktree_path
+            .canonicalize()
+            .map_err(|e| format!("Failed to canonicalize created worktree: {e}"))?;
+        if !canonical_worktree.starts_with(&canonical_container) {
+            return Err(format!(
+                "Canonical worktree '{}' escaped confinement outside container '{}'",
+                canonical_worktree.display(),
+                canonical_container.display()
+            ));
+        }
+        Ok(())
+    })();
+
+    if let Err(confinement_err) = confinement_check {
+        let cleanup_res = run_git_cmd(&canonical_root, &["worktree", "remove", "--force", &worktree_path_str]);
+        let cleanup_msg = match cleanup_res {
+            Ok(_) => "Cleaned up unconfined worktree via git worktree remove --force.".to_string(),
+            Err(e) => format!("Failed cleanup via git worktree remove --force: {e}"),
+        };
+        return Err(format!(
+            "Post-creation confinement check failed: {confinement_err}. Cleanup status: {cleanup_msg}"
+        ));
     }
 
     let resolved_hooks = hooks.unwrap_or_default();
@@ -309,13 +396,20 @@ pub fn floor_remove(
 
     verify_registered_git_worktree(&canonical_root, &expected_worktree_path, &floor.branch_name)?;
 
+    if !is_worktree_clean(&expected_worktree_path)? {
+        return Err(format!(
+            "Floor '{}' has uncommitted changes. Refusing to remove dirty worktree without explicit cleanup.",
+            floor.name
+        ));
+    }
+
     if !floor.hooks.teardown.is_empty() {
         floor_run_hooks(root_path.clone(), floor.clone(), "teardown".to_string())?;
     }
 
     if !is_worktree_clean(&expected_worktree_path)? {
         return Err(format!(
-            "Floor '{}' has uncommitted changes. Refusing to remove dirty worktree without explicit cleanup.",
+            "Floor '{}' became dirty after teardown hooks execution. Refusing to remove dirty worktree.",
             floor.name
         ));
     }
@@ -523,6 +617,73 @@ mod tests {
         run_git_cmd(&repo_path, &["commit", "-m", "Initial commit"]).unwrap();
 
         (temp_dir, repo_path)
+    }
+
+    #[test]
+    fn test_floor_reparse_point_ancestor_fail_closed() {
+        let (_guard, root_path) = init_temp_git_repo();
+        let root_str = root_path.to_string_lossy().to_string();
+
+        let maestri_dir = root_path.join(".open-maestri");
+        fs::create_dir_all(&maestri_dir).unwrap();
+        let link_dir = maestri_dir.join("floors");
+
+        let target_dir = std::env::temp_dir().join("external_floors_target");
+        let _ = fs::create_dir_all(&target_dir);
+
+        #[cfg(windows)]
+        {
+            let res = Command::new("cmd.exe")
+                .args(&["/C", "mklink", "/J", link_dir.to_string_lossy().as_ref(), target_dir.to_string_lossy().as_ref()])
+                .output();
+            if let Ok(out) = res {
+                if out.status.success() {
+                    let err = floor_create(
+                        root_str,
+                        "junction-floor".to_string(),
+                        "feat/junction".to_string(),
+                        false,
+                        None,
+                    );
+                    assert!(err.is_err(), "floor_create must fail closed if ancestor is a junction/reparse point");
+                    let err_msg = err.unwrap_err();
+                    assert!(err_msg.contains("Reparse point") || err_msg.contains("symlink") || err_msg.contains("escaped"));
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&target_dir);
+    }
+
+    #[test]
+    fn test_floor_remove_initial_dirty_prevents_teardown() {
+        let (_guard, root_path) = init_temp_git_repo();
+        let root_str = root_path.to_string_lossy().to_string();
+
+        let hook_file = root_path.join("teardown_ran.txt");
+        let hook_file_str = hook_file.to_string_lossy().replace('\\', "/");
+
+        let hooks = FloorHooks {
+            teardown: vec![format!("Set-Content -Path '{hook_file_str}' -Value 'executed'")],
+            ..Default::default()
+        };
+
+        let floor = floor_create(
+            root_str.clone(),
+            "initial-dirty-floor".to_string(),
+            "feat/dirty-initial".to_string(),
+            false,
+            Some(hooks),
+        )
+        .expect("Failed to create floor");
+
+        let wt_path = PathBuf::from(&floor.worktree_path);
+        let uncommitted_file = wt_path.join("uncommitted.txt");
+        fs::write(&uncommitted_file, "dirty worktree content").unwrap();
+
+        let res = floor_remove(root_str, floor, false);
+        assert!(res.is_err(), "floor_remove must fail if worktree is dirty initially");
+        assert!(!hook_file.exists(), "Teardown hook MUST NOT execute if worktree is dirty initially");
+        assert!(wt_path.exists(), "Worktree directory must remain intact");
     }
 
     #[test]
