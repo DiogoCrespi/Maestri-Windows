@@ -300,4 +300,43 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(serialized.payload.drawings).toHaveLength(1);
     expect((serialized.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
   });
+
+  it("loads floors golden fixture into workspaceStore, updates node position, refreshes lastModifiedAt timestamp, and preserves FloorEntry and CrossFloorConnection", async () => {
+    const floorsFixture = await import("../../tests/fixtures/macOS_v2_floors_workspace.json");
+    const store = useWorkspaceStore.getState();
+
+    store.loadWorkspace(floorsFixture.default);
+    const loadedState = useWorkspaceStore.getState();
+
+    expect(loadedState.nodes).toHaveLength(2);
+    expect(loadedState.isDirty).toBe(false);
+
+    const oldLastModifiedAt = "2026-05-16T10:25:00.000Z";
+
+    // Edit a node on Windows
+    store.updateNodePosition("20000000-0000-0000-0000-000000000001", { x: 300.0, y: 400.0 });
+    expect(useWorkspaceStore.getState().isDirty).toBe(true);
+
+    const serialized = store.serializeWorkspace();
+
+    expect(serialized.payload.floors).toHaveLength(1);
+    const floor = serialized.payload.floors[0];
+    expect(floor.name).toBe("Feature Branch Floor");
+    expect(floor.hooks.setup).toEqual(["git status", "npm install"]);
+    expect(floor.hooks.run).toEqual(["npm test"]);
+    expect(floor.hooks.teardown).toEqual(["echo cleanup"]);
+    expect(floor.hooks.autoRunSetup).toBe(true);
+    expect((floor.hooks as unknown as Record<string, unknown>).customHookMeta).toBe("extra-hook-field");
+    expect((floor as unknown as Record<string, unknown>).customFloorMeta).toBe("floor-attr");
+
+    expect(serialized.payload.crossFloorConnections).toHaveLength(1);
+    const crossConn = serialized.payload.crossFloorConnections[0];
+    expect(crossConn.floorIdA).toBeNull();
+    expect(crossConn.floorIdB).toBe("60000000-0000-0000-0000-000000000001");
+    expect((crossConn as unknown as Record<string, unknown>).customCrossFloorMeta).toBe("floor-bridge");
+
+    const updatedNode = serialized.payload.nodes.find((n) => n.id === "20000000-0000-0000-0000-000000000001");
+    expect(updatedNode?.lastModifiedAt).not.toBe(oldLastModifiedAt);
+    expect(new Date(updatedNode!.lastModifiedAt).getTime()).toBeGreaterThan(new Date(oldLastModifiedAt).getTime());
+  });
 });

@@ -193,12 +193,19 @@ export interface CrossFloorConnection {
   ropePoints: number[][];
 }
 
+export interface FloorHooks {
+  setup: string[];
+  run: string[];
+  teardown: string[];
+  autoRunSetup: boolean;
+}
+
 export interface FloorEntry {
   id: string;
   name: string;
   branchName: string;
   worktreePath: string;
-  hooks: Record<string, unknown>;
+  hooks: FloorHooks;
   createdAt: string;
 }
 
@@ -304,8 +311,41 @@ export function parseWorkspaceDocument(input: unknown): WorkspaceDocument {
   payload.portalConnections = payload.portalConnections ?? [];
   payload.portalToPortalConnections = payload.portalToPortalConnections ?? [];
   payload.noteToNoteConnections = payload.noteToNoteConnections ?? [];
-  payload.crossFloorConnections = payload.crossFloorConnections ?? [];
-  payload.floors = payload.floors ?? [];
+
+  if (Array.isArray(payload.crossFloorConnections)) {
+    payload.crossFloorConnections = payload.crossFloorConnections.map((conn: any) => {
+      if (typeof conn !== "object" || conn === null) return conn;
+      return {
+        ...conn,
+        floorIdA: conn.floorIdA ?? null,
+        floorIdB: conn.floorIdB ?? null,
+        ropePoints: Array.isArray(conn.ropePoints) ? conn.ropePoints : [],
+      };
+    });
+  } else {
+    payload.crossFloorConnections = [];
+  }
+
+  if (Array.isArray(payload.floors)) {
+    payload.floors = payload.floors.map((floor: any) => {
+      if (typeof floor !== "object" || floor === null) return floor;
+      const rawHooks = typeof floor.hooks === "object" && floor.hooks !== null ? floor.hooks : {};
+      const hooks: FloorHooks = {
+        ...rawHooks,
+        setup: Array.isArray(rawHooks.setup) ? rawHooks.setup : [],
+        run: Array.isArray(rawHooks.run) ? rawHooks.run : [],
+        teardown: Array.isArray(rawHooks.teardown) ? rawHooks.teardown : [],
+        autoRunSetup: typeof rawHooks.autoRunSetup === "boolean" ? rawHooks.autoRunSetup : false,
+      };
+      return {
+        ...floor,
+        hooks,
+      };
+    });
+  } else {
+    payload.floors = [];
+  }
+
   payload.drawings = payload.drawings ?? [];
 
   return {

@@ -1,0 +1,132 @@
+{
+  "_originDescription": "Self-contained golden fixture originating from Maestri macOS v2 persistence schema specification (Sources/Floor/FloorManager.swift & Sources/Workspace/Models/WorkspacePayload.swift).",
+  "schemaVersion": 2,
+  "type": "workspace",
+  "customDocumentMeta": "macOS-v2-floors-root-meta",
+  "payload": {
+    "id": "10000000-0000-0000-0000-000000000002",
+    "name": "macOS v2 Floors Golden Compatibility Workspace",
+    "icon": "folder",
+    "isPinned": false,
+    "locationType": "local",
+    "workingDirectory": "/Users/maestri/projects/open-maestri",
+    "preferredIDE": "cursor",
+    "syncConfigFiles": true,
+    "canvasOrigin": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "canvasZoom": 1.0,
+    "customPayloadMeta": {
+      "floorEngine": "swift-v2"
+    },
+    "createdAt": "2026-05-16T10:00:00.000Z",
+    "lastModifiedAt": "2026-05-16T10:30:00.000Z",
+    "nodes": [
+      {
+        "id": "20000000-0000-0000-0000-000000000001",
+        "frame": [
+          [100.0, 200.0],
+          [600.0, 400.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:20:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:25:00.000Z",
+        "content": {
+          "terminal": {
+            "_0": {
+              "id": "30000000-0000-0000-0000-000000000001",
+              "agentType": "claude_code",
+              "command": "claude",
+              "name": "Ground Terminal",
+              "icon": "terminal",
+              "color": "#007AFF",
+              "shellPath": "/bin/zsh",
+              "workingDirectory": "/Users/maestri/projects/open-maestri",
+              "status": "running",
+              "isManager": true,
+              "monitorWithOmbro": false,
+              "autoScrollLocked": false,
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "scrollbackLineCount": 100
+            }
+          }
+        }
+      },
+      {
+        "id": "20000000-0000-0000-0000-000000000002",
+        "frame": [
+          [800.0, 200.0],
+          [600.0, 400.0]
+        ],
+        "zIndex": 0,
+        "isLocked": false,
+        "createdAt": "2026-05-16T10:21:00.000Z",
+        "lastModifiedAt": "2026-05-16T10:26:00.000Z",
+        "content": {
+          "terminal": {
+            "_0": {
+              "id": "30000000-0000-0000-0000-000000000002",
+              "agentType": "codex",
+              "command": "codex",
+              "name": "Sub-Floor Terminal",
+              "icon": "terminal",
+              "color": "#34C759",
+              "shellPath": "/bin/zsh",
+              "workingDirectory": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
+              "status": "idle",
+              "isManager": false,
+              "monitorWithOmbro": false,
+              "autoScrollLocked": false,
+              "shortcutMode": {
+                "kind": "automatic"
+              },
+              "scrollbackLineCount": 50
+            }
+          }
+        }
+      }
+    ],
+    "connections": [],
+    "noteConnections": [],
+    "portalConnections": [],
+    "portalToPortalConnections": [],
+    "noteToNoteConnections": [],
+    "crossFloorConnections": [
+      {
+        "id": "50000000-0000-0000-0000-000000000006",
+        "createdAt": "2026-05-16T10:35:00.000Z",
+        "nodeIdA": "20000000-0000-0000-0000-000000000001",
+        "floorIdA": null,
+        "nodeIdB": "20000000-0000-0000-0000-000000000002",
+        "floorIdB": "60000000-0000-0000-0000-000000000001",
+        "ropePoints": [
+          [100.0, 200.0],
+          [800.0, 200.0]
+        ],
+        "customCrossFloorMeta": "floor-bridge"
+      }
+    ],
+    "floors": [
+      {
+        "id": "60000000-0000-0000-0000-000000000001",
+        "name": "Feature Branch Floor",
+        "branchName": "feat/mac-win-compat",
+        "worktreePath": "/Users/maestri/projects/open-maestri/.worktrees/mac-win-compat",
+        "hooks": {
+          "setup": ["git status", "npm install"],
+          "run": ["npm test"],
+          "teardown": ["echo cleanup"],
+          "autoRunSetup": true,
+          "customHookMeta": "extra-hook-field"
+        },
+        "createdAt": "2026-05-16T10:15:00.000Z",
+        "customFloorMeta": "floor-attr"
+      }
+    ],
+    "drawings": []
+  }
+}
