@@ -21,6 +21,31 @@ mod tests {
         token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit())
     }
 
+    fn extract_ipc_token(output: &str, prefix: &str) -> Option<String> {
+        output.lines().find_map(|line| {
+            if let Some((_, val)) = line.split_once(prefix) {
+                let trimmed = val.trim();
+                if is_valid_ipc_token(trimmed) {
+                    return Some(trimmed.to_string());
+                }
+            }
+            None
+        })
+    }
+
+    #[test]
+    fn test_native_harness_token_parser_helper_pure() {
+        let mock_output = "PS C:\\> Write-Output (\"TOKEN_A:\" + $env:MAESTRI_TOKEN)\r\nTOKEN_A:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\nPS C:\\>";
+        let token = extract_ipc_token(mock_output, "TOKEN_A:");
+        assert_eq!(
+            token.as_deref(),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+
+        let invalid_output = "PS C:\\> Write-Output (\"TOKEN_A:\" + $env:MAESTRI_TOKEN)\r\nTOKEN_A:invalid_token_format\r\n";
+        assert_eq!(extract_ipc_token(invalid_output, "TOKEN_A:"), None);
+    }
+
     #[test]
     fn test_native_harness_multiple_conpty_input_output_resize_stop_all() {
         let registry = TerminalRegistry::new();
@@ -210,14 +235,9 @@ mod tests {
             let start = std::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_secs(5) {
                 if let Ok(output) = registry.recent_output("session-a") {
-                    if let Some(line) = output.lines().find(|l| l.contains("TOKEN_A:")) {
-                        if let Some((_, val)) = line.split_once("TOKEN_A:") {
-                            let trimmed = val.trim();
-                            if is_valid_ipc_token(trimmed) {
-                                token_a = trimmed.to_string();
-                                break;
-                            }
-                        }
+                    if let Some(t) = extract_ipc_token(&output, "TOKEN_A:") {
+                        token_a = t;
+                        break;
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -232,14 +252,9 @@ mod tests {
             let start = std::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_secs(5) {
                 if let Ok(output) = registry.recent_output("session-b") {
-                    if let Some(line) = output.lines().find(|l| l.contains("TOKEN_B:")) {
-                        if let Some((_, val)) = line.split_once("TOKEN_B:") {
-                            let trimmed = val.trim();
-                            if is_valid_ipc_token(trimmed) {
-                                token_b = trimmed.to_string();
-                                break;
-                            }
-                        }
+                    if let Some(t) = extract_ipc_token(&output, "TOKEN_B:") {
+                        token_b = t;
+                        break;
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));

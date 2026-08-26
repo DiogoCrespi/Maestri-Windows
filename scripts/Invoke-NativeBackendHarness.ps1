@@ -45,7 +45,8 @@ function Invoke-SelfTest {
 }
 
 function Stop-ProcessTree {
-    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return }
     try {
         & taskkill.exe /PID $ProcessId /T /F 2>&1 | Out-Null
     } catch {}
@@ -117,7 +118,9 @@ try {
 
     $completed = $process.WaitForExit($TimeoutSeconds * 1000)
     if (-not $completed) {
-        Stop-ProcessTree -ProcessId $process.Id
+        if ($process.Id -gt 0) {
+            Stop-ProcessTree -ProcessId $process.Id
+        }
         throw "cargo test timed out after $TimeoutSeconds seconds"
     }
 
@@ -136,7 +139,17 @@ try {
     Write-Error $_
     exit 1
 } finally {
-    if ($spawnedProcess -and -not $spawnedProcess.HasExited) {
-        Stop-ProcessTree -ProcessId $spawnedProcess.Id
+    if ($spawnedProcess) {
+        try {
+            $hasExited = $false
+            try { $hasExited = $spawnedProcess.HasExited } catch {}
+            if (-not $hasExited) {
+                $pidToKill = 0
+                try { $pidToKill = $spawnedProcess.Id } catch {}
+                if ($pidToKill -gt 0) {
+                    Stop-ProcessTree -ProcessId $pidToKill
+                }
+            }
+        } catch {}
     }
 }
