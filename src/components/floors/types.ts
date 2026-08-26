@@ -3,15 +3,17 @@ export interface FloorHooks {
   run: string[];
   teardown: string[];
   autoRunSetup: boolean;
+  [key: string]: unknown;
 }
 
 export interface FloorItem {
   id: string;
   name: string;
   branchName: string;
-  worktreePath?: string;
+  worktreePath: string;
+  createdAt: string;
   hooks: FloorHooks;
-  createdAt?: string;
+  [key: string]: unknown;
 }
 
 export interface CreateFloorInput {
@@ -25,7 +27,14 @@ export interface DeleteFloorInput {
   keepBranch: boolean;
 }
 
+export type HookPhase = "setup" | "run" | "teardown";
+
 export interface LandFloorInput {
   floorId: string;
   targetBranch: string;
+}
+
+export interface FloorOperationState {
+  isSubmitting: boolean;
+  error: string | null;
 }

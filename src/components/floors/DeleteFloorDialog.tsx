@@ -1,50 +1,60 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { DeleteFloorInput, FloorItem } from "./types";
+import { FloorOperationController, useDialogFocus } from "./controller";
 import "./FloorOverviewPanel.css";
 
 export interface DeleteFloorDialogProps {
   isOpen: boolean;
   floor: FloorItem | null;
   isSubmitting?: boolean;
+  error?: string | null;
   onConfirm: (input: DeleteFloorInput) => Promise<void> | void;
   onCancel: () => void;
+  controller?: FloorOperationController;
 }
 
 export const DeleteFloorDialog: React.FC<DeleteFloorDialogProps> = ({
   isOpen,
   floor,
   isSubmitting = false,
+  error = null,
   onConfirm,
   onCancel,
+  controller,
 }) => {
   const [keepBranch, setKeepBranch] = useState(true);
   const [localSubmitting, setLocalSubmitting] = useState(false);
-  const submittingRef = useRef(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const deleteBtnRef = useRef<HTMLButtonElement>(null);
+  const internalControllerRef = useRef<FloorOperationController>(controller || new FloorOperationController());
+
+  useDialogFocus(isOpen, deleteBtnRef);
 
   useEffect(() => {
     if (isOpen) {
       setKeepBranch(true);
       setLocalSubmitting(false);
-      submittingRef.current = false;
+      setLocalError(null);
+      internalControllerRef.current.clearError();
     }
   }, [isOpen]);
 
-  const isBusy = isSubmitting || localSubmitting;
+  const isBusy = isSubmitting || localSubmitting || internalControllerRef.current.isSubmitting;
+  const activeError = error || localError || internalControllerRef.current.error;
 
   const handleConfirm = useCallback(async () => {
-    if (!floor || submittingRef.current || isBusy) return;
-    submittingRef.current = true;
-    setLocalSubmitting(true);
-    try {
-      await onConfirm({
-        floorId: floor.id,
-        keepBranch,
-      });
-    } finally {
-      submittingRef.current = false;
-      setLocalSubmitting(false);
+    if (!floor) return;
+    setLocalError(null);
+    const ctrl = controller || internalControllerRef.current;
+    const res = await ctrl.runOperation(
+      () => onConfirm({ floorId: floor.id, keepBranch }),
+      (state) => setLocalSubmitting(state.isSubmitting),
+    );
+
+    if (!res.success && res.error) {
+      setLocalError(res.error);
     }
-  }, [floor, isBusy, keepBranch, onConfirm]);
+  }, [controller, floor, keepBranch, onConfirm]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -84,6 +94,12 @@ export const DeleteFloorDialog: React.FC<DeleteFloorDialogProps> = ({
         </div>
 
         <div className="floor-panel__body">
+          {activeError && (
+            <div className="floor-panel__error" role="alert">
+              ⚠️ {activeError}
+            </div>
+          )}
+
           <p style={{ fontSize: 14, color: "#d4d4d8", margin: "0 0 12px 0" }}>
             Você está prestes a remover o Floor <strong>{floor.name}</strong> (branch: <code>{floor.branchName}</code>). O diretório clonado da worktree será excluído.
           </p>
@@ -126,6 +142,7 @@ export const DeleteFloorDialog: React.FC<DeleteFloorDialogProps> = ({
           </button>
 
           <button
+            ref={deleteBtnRef}
             type="button"
             className="floor-btn floor-btn--danger"
             onClick={handleConfirm}

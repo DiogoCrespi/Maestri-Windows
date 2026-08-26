@@ -1,5 +1,5 @@
 export * from "./types";
-export * from "./helpers";
+export * from "./controller";
 export * from "./FloorOverviewPanel";
 export * from "./CreateFloorDialog";
 export * from "./FloorHooksEditor";

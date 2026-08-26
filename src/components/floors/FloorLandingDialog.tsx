@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { FloorItem, LandFloorInput } from "./types";
+import { FloorOperationController, useDialogFocus } from "./controller";
 import "./FloorOverviewPanel.css";
 
 export interface FloorLandingDialogProps {
@@ -13,6 +14,7 @@ export interface FloorLandingDialogProps {
   isSuccess?: boolean;
   onLand: (input: LandFloorInput) => Promise<void> | void;
   onCancel: () => void;
+  controller?: FloorOperationController;
 }
 
 export const FloorLandingDialog: React.FC<FloorLandingDialogProps> = ({
@@ -26,38 +28,47 @@ export const FloorLandingDialog: React.FC<FloorLandingDialogProps> = ({
   isSuccess = false,
   onLand,
   onCancel,
+  controller,
 }) => {
   const [targetBranch, setTargetBranch] = useState(groundBranch || "main");
   const [localLanding, setLocalLanding] = useState(false);
-  const submittingRef = useRef(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const targetInputRef = useRef<HTMLInputElement>(null);
+  const internalControllerRef = useRef<FloorOperationController>(controller || new FloorOperationController());
+
+  useDialogFocus(isOpen, targetInputRef);
 
   useEffect(() => {
     if (isOpen) {
       setTargetBranch(groundBranch || "main");
       setLocalLanding(false);
-      submittingRef.current = false;
+      setLocalError(null);
+      internalControllerRef.current.clearError();
     }
   }, [isOpen, groundBranch]);
 
-  const isBusy = isLanding || localLanding;
+  const isBusy = isLanding || localLanding || internalControllerRef.current.isSubmitting;
+  const activeError = error || localError || internalControllerRef.current.error;
+
+  const hasValidDiff = !isLoadingDiff && diffText.trim().length > 0;
+  const isLandDisabled = isBusy || isSuccess || !targetBranch.trim() || isLoadingDiff || !hasValidDiff;
 
   const handleLand = useCallback(async () => {
-    if (!floor || submittingRef.current || isBusy || isSuccess) return;
+    if (!floor || isLandDisabled) return;
     const trimmedTarget = targetBranch.trim();
     if (!trimmedTarget) return;
 
-    submittingRef.current = true;
-    setLocalLanding(true);
-    try {
-      await onLand({
-        floorId: floor.id,
-        targetBranch: trimmedTarget,
-      });
-    } finally {
-      submittingRef.current = false;
-      setLocalLanding(false);
+    setLocalError(null);
+    const ctrl = controller || internalControllerRef.current;
+    const res = await ctrl.runOperation(
+      () => onLand({ floorId: floor.id, targetBranch: trimmedTarget }),
+      (state) => setLocalLanding(state.isSubmitting),
+    );
+
+    if (!res.success && res.error) {
+      setLocalError(res.error);
     }
-  }, [floor, isBusy, isSuccess, onLand, targetBranch]);
+  }, [controller, floor, isLandDisabled, onLand, targetBranch]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -110,6 +121,7 @@ export const FloorLandingDialog: React.FC<FloorLandingDialogProps> = ({
               </label>
               <input
                 id="landing-target-branch"
+                ref={targetInputRef}
                 type="text"
                 className="floor-input"
                 style={{ marginTop: 2, width: "100%", boxSizing: "border-box" }}
@@ -129,14 +141,14 @@ export const FloorLandingDialog: React.FC<FloorLandingDialogProps> = ({
               </div>
             ) : (
               <div className="floor-diff-box">
-                {diffText || "Sem alterações pendentes em relação ao target."}
+                {diffText || "Carregando visualização de alterações..."}
               </div>
             )}
           </div>
 
-          {error && (
+          {activeError && (
             <div className="floor-panel__error" role="alert">
-              ⚠️ {error}
+              ⚠️ {activeError}
             </div>
           )}
 
@@ -172,7 +184,7 @@ export const FloorLandingDialog: React.FC<FloorLandingDialogProps> = ({
             type="button"
             className="floor-btn floor-btn--primary"
             onClick={handleLand}
-            disabled={isBusy || isSuccess || !targetBranch.trim()}
+            disabled={isLandDisabled}
           >
             {isLanding ? "Realizando Merge..." : isSuccess ? "Merge Concluído" : "Land & Merge"}
           </button>

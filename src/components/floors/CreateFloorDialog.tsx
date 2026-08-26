@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { CreateFloorInput } from "./types";
-import { slugifyBranchName } from "./helpers";
+import { slugifyBranchName, validateCreateFloorInput, FloorOperationController, useDialogFocus } from "./controller";
 import "./FloorOverviewPanel.css";
 
 export interface CreateFloorDialogProps {
@@ -9,9 +9,8 @@ export interface CreateFloorDialogProps {
   error?: string | null;
   onSubmit: (input: CreateFloorInput) => Promise<void> | void;
   onCancel: () => void;
+  controller?: FloorOperationController;
 }
-
-
 
 export const CreateFloorDialog: React.FC<CreateFloorDialogProps> = ({
   isOpen,
@@ -19,13 +18,17 @@ export const CreateFloorDialog: React.FC<CreateFloorDialogProps> = ({
   error = null,
   onSubmit,
   onCancel,
+  controller,
 }) => {
   const [name, setName] = useState("");
   const [branchName, setBranchName] = useState("");
   const [useExistingBranch, setUseExistingBranch] = useState(false);
   const [localSubmitting, setLocalSubmitting] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const submittingRef = useRef(false);
+  const internalControllerRef = useRef<FloorOperationController>(controller || new FloorOperationController());
+
+  useDialogFocus(isOpen, nameInputRef);
 
   useEffect(() => {
     if (isOpen) {
@@ -33,8 +36,8 @@ export const CreateFloorDialog: React.FC<CreateFloorDialogProps> = ({
       setBranchName("");
       setUseExistingBranch(false);
       setLocalSubmitting(false);
-      submittingRef.current = false;
-      setTimeout(() => nameInputRef.current?.focus(), 50);
+      setLocalError(null);
+      internalControllerRef.current.clearError();
     }
   }, [isOpen]);
 
@@ -58,30 +61,36 @@ export const CreateFloorDialog: React.FC<CreateFloorDialogProps> = ({
     }
   };
 
-  const isBusy = isSubmitting || localSubmitting;
+  const isBusy = isSubmitting || localSubmitting || internalControllerRef.current.isSubmitting;
+  const activeError = error || localError || internalControllerRef.current.error;
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (submittingRef.current || isBusy) return;
-      const trimmedName = name.trim();
-      const trimmedBranch = branchName.trim();
-      if (!trimmedName || !trimmedBranch) return;
+      const input: CreateFloorInput = {
+        name: name.trim(),
+        branchName: branchName.trim(),
+        useExistingBranch,
+      };
 
-      submittingRef.current = true;
-      setLocalSubmitting(true);
-      try {
-        await onSubmit({
-          name: trimmedName,
-          branchName: trimmedBranch,
-          useExistingBranch,
-        });
-      } finally {
-        submittingRef.current = false;
-        setLocalSubmitting(false);
+      const validation = validateCreateFloorInput(input);
+      if (!validation.isValid) {
+        setLocalError(validation.error || "Dados de entrada inválidos");
+        return;
+      }
+
+      setLocalError(null);
+      const ctrl = controller || internalControllerRef.current;
+      const res = await ctrl.runOperation(
+        () => onSubmit(input),
+        (state) => setLocalSubmitting(state.isSubmitting),
+      );
+
+      if (!res.success && res.error) {
+        setLocalError(res.error);
       }
     },
-    [branchName, isBusy, name, onSubmit, useExistingBranch],
+    [branchName, controller, name, onSubmit, useExistingBranch],
   );
 
   useEffect(() => {
@@ -125,7 +134,7 @@ export const CreateFloorDialog: React.FC<CreateFloorDialogProps> = ({
 
         <form onSubmit={handleSubmit}>
           <div className="floor-panel__body">
-            {error && <div className="floor-panel__error" role="alert">{error}</div>}
+            {activeError && <div className="floor-panel__error" role="alert">{activeError}</div>}
 
             <div className="floor-form-group">
               <label htmlFor="create-floor-name">Nome do Floor</label>

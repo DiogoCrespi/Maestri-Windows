@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import type { FloorHooks } from "./types";
+import type { FloorHooks, HookPhase } from "./types";
+import { sanitizeFloorHooks, FloorOperationController, useDialogFocus } from "./controller";
 import "./FloorOverviewPanel.css";
 
 export interface FloorHooksEditorProps {
@@ -8,9 +9,11 @@ export interface FloorHooksEditorProps {
   initialHooks: FloorHooks;
   isSubmitting?: boolean;
   isRunning?: boolean;
+  error?: string | null;
   onSave: (hooks: FloorHooks) => Promise<void> | void;
-  onRunHook?: (phase: "setup" | "run" | "teardown" | "all") => Promise<void> | void;
+  onRunHook?: (phase: HookPhase) => Promise<void> | void;
   onCancel: () => void;
+  controller?: FloorOperationController;
 }
 
 export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
@@ -19,9 +22,11 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
   initialHooks,
   isSubmitting = false,
   isRunning = false,
+  error = null,
   onSave,
   onRunHook,
   onCancel,
+  controller,
 }) => {
   const [hooks, setHooks] = useState<FloorHooks>({
     setup: [],
@@ -29,32 +34,33 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
     teardown: [],
     autoRunSetup: false,
   });
-  const [localBusy, setLocalBusy] = useState(false);
-  const submittingRef = useRef(false);
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const internalControllerRef = useRef<FloorOperationController>(controller || new FloorOperationController());
+
+  useDialogFocus(isOpen, closeBtnRef);
 
   useEffect(() => {
     if (isOpen) {
-      setHooks({
-        setup: [...(initialHooks?.setup ?? [])],
-        run: [...(initialHooks?.run ?? [])],
-        teardown: [...(initialHooks?.teardown ?? [])],
-        autoRunSetup: initialHooks?.autoRunSetup ?? false,
-      });
-      setLocalBusy(false);
-      submittingRef.current = false;
+      setHooks(sanitizeFloorHooks(initialHooks, {}));
+      setLocalSubmitting(false);
+      setLocalError(null);
+      internalControllerRef.current.clearError();
     }
   }, [isOpen, initialHooks]);
 
-  const isBusy = isSubmitting || isRunning || localBusy;
+  const isBusy = isSubmitting || isRunning || localSubmitting || internalControllerRef.current.isSubmitting;
+  const activeError = error || localError || internalControllerRef.current.error;
 
-  const handleAddCommand = (phase: "setup" | "run" | "teardown") => {
+  const handleAddCommand = (phase: HookPhase) => {
     setHooks((prev) => ({
       ...prev,
       [phase]: [...prev[phase], ""],
     }));
   };
 
-  const handleCommandChange = (phase: "setup" | "run" | "teardown", index: number, value: string) => {
+  const handleCommandChange = (phase: HookPhase, index: number, value: string) => {
     setHooks((prev) => {
       const updated = [...prev[phase]];
       updated[index] = value;
@@ -65,7 +71,7 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
     });
   };
 
-  const handleRemoveCommand = (phase: "setup" | "run" | "teardown", index: number) => {
+  const handleRemoveCommand = (phase: HookPhase, index: number) => {
     setHooks((prev) => {
       const updated = [...prev[phase]];
       updated.splice(index, 1);
@@ -77,26 +83,35 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
   };
 
   const handleSave = useCallback(async () => {
-    if (submittingRef.current || isBusy) return;
-    submittingRef.current = true;
-    setLocalBusy(true);
-    try {
-      await onSave(hooks);
-    } finally {
-      submittingRef.current = false;
-      setLocalBusy(false);
-    }
-  }, [hooks, isBusy, onSave]);
+    const cleanedHooks = sanitizeFloorHooks(initialHooks, hooks);
+    setLocalError(null);
+    const ctrl = controller || internalControllerRef.current;
+    const res = await ctrl.runOperation(
+      () => onSave(cleanedHooks),
+      (state) => setLocalSubmitting(state.isSubmitting),
+    );
 
-  const handleRunAll = useCallback(async () => {
-    if (!onRunHook || isBusy) return;
-    setLocalBusy(true);
-    try {
-      await onRunHook("all");
-    } finally {
-      setLocalBusy(false);
+    if (!res.success && res.error) {
+      setLocalError(res.error);
     }
-  }, [isBusy, onRunHook]);
+  }, [controller, hooks, initialHooks, onSave]);
+
+  const handleRunPhase = useCallback(
+    async (phase: HookPhase) => {
+      if (!onRunHook) return;
+      setLocalError(null);
+      const ctrl = controller || internalControllerRef.current;
+      const res = await ctrl.runOperation(
+        () => onRunHook(phase),
+        (state) => setLocalSubmitting(state.isSubmitting),
+      );
+
+      if (!res.success && res.error) {
+        setLocalError(res.error);
+      }
+    },
+    [controller, onRunHook],
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -116,7 +131,7 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
     <div className="floor-panel-overlay" data-testid="hooks-editor-overlay">
       <div
         className="floor-dialog"
-        style={{ width: 540 }}
+        style={{ width: 560 }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="hooks-editor-title"
@@ -126,6 +141,7 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
             Hooks Config — {floorName}
           </h2>
           <button
+            ref={closeBtnRef}
             type="button"
             className="floor-panel__close-btn"
             onClick={onCancel}
@@ -137,18 +153,37 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
         </div>
 
         <div className="floor-panel__body">
+          {activeError && (
+            <div className="floor-panel__error" role="alert">
+              ⚠️ {activeError}
+            </div>
+          )}
+
           {/* Setup Section */}
           <div className="floor-form-group">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <label>Setup Hooks (pós-criação)</label>
-              <button
-                type="button"
-                className="floor-btn"
-                onClick={() => handleAddCommand("setup")}
-                disabled={isBusy}
-              >
-                + Add Command
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                {onRunHook && (
+                  <button
+                    type="button"
+                    className="floor-btn"
+                    onClick={() => handleRunPhase("setup")}
+                    disabled={isBusy}
+                    title="Executar Setup Hooks"
+                  >
+                    ⚡ Run Setup
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="floor-btn"
+                  onClick={() => handleAddCommand("setup")}
+                  disabled={isBusy}
+                >
+                  + Add Command
+                </button>
+              </div>
             </div>
             {hooks.setup.map((cmd, idx) => (
               <div key={`setup-${idx}`} style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -191,14 +226,27 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
           <div className="floor-form-group">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <label>Run Hooks (sob demanda)</label>
-              <button
-                type="button"
-                className="floor-btn"
-                onClick={() => handleAddCommand("run")}
-                disabled={isBusy}
-              >
-                + Add Command
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                {onRunHook && (
+                  <button
+                    type="button"
+                    className="floor-btn floor-btn--primary"
+                    onClick={() => handleRunPhase("run")}
+                    disabled={isBusy}
+                    title="Executar Run Hooks principais"
+                  >
+                    ⚡ Run Hooks
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="floor-btn"
+                  onClick={() => handleAddCommand("run")}
+                  disabled={isBusy}
+                >
+                  + Add Command
+                </button>
+              </div>
             </div>
             {hooks.run.map((cmd, idx) => (
               <div key={`run-${idx}`} style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -230,14 +278,27 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
           <div className="floor-form-group">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <label>Teardown Hooks (ao excluir)</label>
-              <button
-                type="button"
-                className="floor-btn"
-                onClick={() => handleAddCommand("teardown")}
-                disabled={isBusy}
-              >
-                + Add Command
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                {onRunHook && (
+                  <button
+                    type="button"
+                    className="floor-btn"
+                    onClick={() => handleRunPhase("teardown")}
+                    disabled={isBusy}
+                    title="Executar Teardown Hooks"
+                  >
+                    ⚡ Run Teardown
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="floor-btn"
+                  onClick={() => handleAddCommand("teardown")}
+                  disabled={isBusy}
+                >
+                  + Add Command
+                </button>
+              </div>
             </div>
             {hooks.teardown.map((cmd, idx) => (
               <div key={`teardown-${idx}`} style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -265,17 +326,6 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
         </div>
 
         <div className="floor-panel__footer">
-          {onRunHook && (
-            <button
-              type="button"
-              className="floor-btn"
-              onClick={handleRunAll}
-              disabled={isBusy}
-            >
-              {isRunning ? "Executando..." : "⚡ Run All Hooks"}
-            </button>
-          )}
-
           <button
             type="button"
             className="floor-btn"
@@ -291,7 +341,7 @@ export const FloorHooksEditor: React.FC<FloorHooksEditorProps> = ({
             onClick={handleSave}
             disabled={isBusy}
           >
-            {isSubmitting ? "Salvando..." : "Salvar Hooks"}
+            {isBusy ? "Salvando..." : "Salvar Hooks"}
           </button>
         </div>
       </div>

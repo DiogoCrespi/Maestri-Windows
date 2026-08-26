@@ -1,12 +1,13 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import type { FloorItem } from "./types";
+import { useDialogFocus } from "./controller";
 import "./FloorOverviewPanel.css";
 
 export interface FloorOverviewPanelProps {
   isOpen: boolean;
   floors: FloorItem[];
   groundBranch: string;
-  activeFloorId: string | null;
+  selectedFloorId: string | null;
   isLoading?: boolean;
   errorMessage?: string | null;
   onSelectFloor: (floorId: string | null) => void;
@@ -21,7 +22,7 @@ export const FloorOverviewPanel: React.FC<FloorOverviewPanelProps> = ({
   isOpen,
   floors,
   groundBranch,
-  activeFloorId,
+  selectedFloorId,
   isLoading = false,
   errorMessage = null,
   onSelectFloor,
@@ -31,6 +32,9 @@ export const FloorOverviewPanel: React.FC<FloorOverviewPanelProps> = ({
   onDeleteFloorClick,
   onClose,
 }) => {
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(isOpen, closeBtnRef);
+
   useEffect(() => {
     if (!isOpen || !onClose) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -45,7 +49,7 @@ export const FloorOverviewPanel: React.FC<FloorOverviewPanelProps> = ({
 
   if (!isOpen) return null;
 
-  const isGroundSelected = activeFloorId === null || activeFloorId === "ground";
+  const isGroundSelected = selectedFloorId === null || selectedFloorId === "ground";
 
   return (
     <div className="floor-panel-overlay" data-testid="floor-overview-overlay">
@@ -61,6 +65,7 @@ export const FloorOverviewPanel: React.FC<FloorOverviewPanelProps> = ({
           </h2>
           {onClose && (
             <button
+              ref={closeBtnRef}
               type="button"
               className="floor-panel__close-btn"
               onClick={onClose}
@@ -79,12 +84,12 @@ export const FloorOverviewPanel: React.FC<FloorOverviewPanelProps> = ({
             </div>
           )}
 
-          <div className="floor-panel__list" role="list">
+          <div className="floor-panel__list" role="listbox" aria-label="Lista de Floors">
             {/* Ground Floor (Always Present) */}
             <div
               className={`floor-row floor-row--ground ${isGroundSelected ? "floor-row--active" : ""}`}
               onClick={() => !isLoading && onSelectFloor(null)}
-              role="listitem"
+              role="option"
               tabIndex={0}
               aria-selected={isGroundSelected}
               onKeyDown={(e) => {
@@ -110,13 +115,13 @@ export const FloorOverviewPanel: React.FC<FloorOverviewPanelProps> = ({
 
             {/* Created Floors List */}
             {floors.map((floor) => {
-              const isSelected = activeFloorId === floor.id;
+              const isSelected = selectedFloorId === floor.id;
               return (
                 <div
                   key={floor.id}
                   className={`floor-row ${isSelected ? "floor-row--active" : ""}`}
                   onClick={() => !isLoading && onSelectFloor(floor.id)}
-                  role="listitem"
+                  role="option"
                   tabIndex={0}
                   aria-selected={isSelected}
                   onKeyDown={(e) => {
