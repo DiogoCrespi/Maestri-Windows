@@ -1,5 +1,6 @@
 mod access_graph;
 mod filesystem;
+mod floors;
 mod ipc;
 mod maestro;
 mod native_harness;
@@ -895,7 +896,13 @@ pub fn run() {
             routine_commands::routine_upsert,
             routine_commands::routine_remove,
             routine_commands::routine_set_enabled,
-            routine_commands::routine_run_now
+            routine_commands::routine_run_now,
+            floors::floor_current_branch,
+            floors::floor_create,
+            floors::floor_remove,
+            floors::floor_run_hooks,
+            floors::floor_preview_land,
+            floors::floor_land
         ])
         .build(tauri::generate_context!())
         .expect("error while building open-maestri Tauri application")
