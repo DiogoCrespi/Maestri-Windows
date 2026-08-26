@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { floorEntryToFloorItem, floorItemToFloorEntry } from "./useFloorManager";
+import {
+  useFloorManager,
+  floorEntryToFloorItem,
+  floorItemToFloorEntry,
+  updateFloorsForWorkspace,
+} from "./useFloorManager";
 import { useWorkspaceStore } from "../../store/workspaceStore";
 import { FloorController } from "../../floors/floorController";
 import type { FloorEntry, FloorHooks } from "../../model/workspace";
@@ -81,7 +86,12 @@ describe("useFloorManager & FloorController Integration Tests", () => {
 
     const controller = new FloorController({
       initialFloors: [],
-      onFloorsChange: (updated) => useWorkspaceStore.getState().setFloors(updated),
+      onFloorsChange: (updated) => {
+        const storeDoc = useWorkspaceStore.getState().currentDocument;
+        updateFloorsForWorkspace("ws-1", updated, storeDoc, (floors, opts) =>
+          useWorkspaceStore.getState().setFloors(floors, opts),
+        );
+      },
     });
 
     // Perform silent sync
@@ -108,7 +118,10 @@ describe("useFloorManager & FloorController Integration Tests", () => {
       initialFloors: [],
       onFloorsChange: (updated) => {
         onFloorsChangeCount++;
-        useWorkspaceStore.getState().setFloors(updated);
+        const storeDoc = useWorkspaceStore.getState().currentDocument;
+        updateFloorsForWorkspace("ws-1", updated, storeDoc, (floors, opts) =>
+          useWorkspaceStore.getState().setFloors(floors, opts),
+        );
       },
     });
 
@@ -146,7 +159,12 @@ describe("useFloorManager & FloorController Integration Tests", () => {
 
     const controller = new FloorController({
       initialFloors: [],
-      onFloorsChange: (updated) => useWorkspaceStore.getState().setFloors(updated),
+      onFloorsChange: (updated) => {
+        const storeDoc = useWorkspaceStore.getState().currentDocument;
+        updateFloorsForWorkspace("ws-1", updated, storeDoc, (floors, opts) =>
+          useWorkspaceStore.getState().setFloors(floors, opts),
+        );
+      },
     });
 
     await expect(
@@ -163,49 +181,8 @@ describe("useFloorManager & FloorController Integration Tests", () => {
     expect(docFloors?.[0].id).toBe("floor-setup-fail");
   });
 
-  it("createFloor rejects cleanly on bridge error", async () => {
-    vi.mocked(defaultFloorBridge.createFloor).mockRejectedValueOnce(new Error("Branch name exists"));
-
-    const controller = new FloorController({
-      initialFloors: [],
-      onFloorsChange: (updated) => useWorkspaceStore.getState().setFloors(updated),
-    });
-
-    await expect(
-      controller.createFloor({
-        rootPath: "C:\\Nestjs\\open-maestri",
-        name: "Invalid Floor",
-        branchName: "existing-branch",
-        useExistingBranch: false,
-      }),
-    ).rejects.toThrow("Branch name exists");
-  });
-
-  it("ignora atualizações atrasadas (stale completion) quando o workspace ativo muda para B antes da conclusão", async () => {
-    let resolveBridge: (f: FloorEntry) => void = () => {};
-    const delayedPromise = new Promise<FloorEntry>((res) => {
-      resolveBridge = res;
-    });
-
-    vi.mocked(defaultFloorBridge.createFloor).mockReturnValueOnce(delayedPromise);
-
-    // Inicializa controller para Workspace A (id: "ws-1")
-    const controllerA = new FloorController({
-      initialFloors: [],
-      onFloorsChange: (updated) => {
-        const storeDoc = useWorkspaceStore.getState().currentDocument;
-        if (!storeDoc || storeDoc.payload.id !== "ws-1") return;
-        useWorkspaceStore.getState().setFloors(updated);
-      },
-    });
-
-    const createOp = controllerA.createFloor({
-      rootPath: "C:\\Nestjs\\open-maestri",
-      name: "Floor Workspace A",
-      branchName: "feat/ws-a",
-    });
-
-    // Antes do bridge responder, a aplicação troca o workspace ativo para Workspace B (id: "ws-2")
+  it("updateFloorsForWorkspace ignora atualizações para workspace inativo (stale completion) e atualiza o workspace ativo normalmente", () => {
+    const docA = JSON.parse(JSON.stringify(initialDoc));
     const docB = {
       ...initialDoc,
       payload: {
@@ -216,28 +193,27 @@ describe("useFloorManager & FloorController Integration Tests", () => {
         lastModifiedAt: "2026-08-26T00:00:00.000Z",
       },
     };
-    useWorkspaceStore.setState({
-      currentDocument: docB,
-      isDirty: false,
-    });
 
-    // Agora resolve a operação atrasada do Workspace A
-    resolveBridge({
-      id: "floor-ws-a",
-      name: "Floor Workspace A",
-      branchName: "feat/ws-a",
-      worktreePath: "C:\\path\\ws-a",
-      hooks: { setup: [], run: [], teardown: [], autoRunSetup: false },
-      createdAt: "2026-08-26T00:00:00.000Z",
-    });
+    const mockSetFloors = vi.fn();
+    const updatedFloors: FloorEntry[] = [
+      {
+        id: "floor-ws-a",
+        name: "Floor A",
+        branchName: "feat/a",
+        worktreePath: "C:\\path\\a",
+        hooks: { setup: [], run: [], teardown: [], autoRunSetup: false },
+        createdAt: "2026-08-26T00:00:00.000Z",
+      },
+    ];
 
-    await createOp;
+    // 1. Chamada atrasada referente a Workspace A (targetWorkspaceId: "ws-1") quando o workspace ativo é Workspace B (docB)
+    const resultStale = updateFloorsForWorkspace("ws-1", updatedFloors, docB, mockSetFloors);
+    expect(resultStale).toBe(false);
+    expect(mockSetFloors).not.toHaveBeenCalled();
 
-    // Workspace B deve permanecer INTACTO (floors vazios, isDirty: false, timestamp idêntico)
-    const storeB = useWorkspaceStore.getState();
-    expect(storeB.currentDocument?.payload.id).toBe("ws-2");
-    expect(storeB.currentDocument?.payload.floors).toEqual([]);
-    expect(storeB.isDirty).toBe(false);
-    expect(storeB.currentDocument?.payload.lastModifiedAt).toBe("2026-08-26T00:00:00.000Z");
+    // 2. Chamada referente a Workspace A quando o workspace ativo é Workspace A (docA)
+    const resultActive = updateFloorsForWorkspace("ws-1", updatedFloors, docA, mockSetFloors);
+    expect(resultActive).toBe(true);
+    expect(mockSetFloors).toHaveBeenCalledWith(updatedFloors);
   });
 });

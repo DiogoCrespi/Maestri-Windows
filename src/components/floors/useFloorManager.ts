@@ -1,8 +1,21 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useWorkspaceStore } from "../../store/workspaceStore";
 import { FloorController } from "../../floors/floorController";
-import type { FloorEntry } from "../../model/workspace";
+import type { FloorEntry, WorkspaceDocument } from "../../model/workspace";
 import type { FloorItem, CreateFloorInput, DeleteFloorInput, LandFloorInput, FloorHooks, HookPhase } from "./types";
+
+export function updateFloorsForWorkspace(
+  targetWorkspaceId: string | undefined,
+  updatedFloors: FloorEntry[],
+  currentDocument: WorkspaceDocument | null,
+  setFloors: (floors: FloorEntry[], options?: { dirty?: boolean }) => void,
+): boolean {
+  if (!currentDocument || !targetWorkspaceId || currentDocument.payload.id !== targetWorkspaceId) {
+    return false;
+  }
+  setFloors(updatedFloors);
+  return true;
+}
 
 export function floorEntryToFloorItem(entry: FloorEntry): FloorItem {
   const rawHooks = (entry.hooks as unknown as FloorHooks) ?? { setup: [], run: [], teardown: [], autoRunSetup: false };
@@ -66,11 +79,7 @@ export function useFloorManager(workspaceDirectory: string) {
       initialFloors: rawFloors,
       onFloorsChange: (updated) => {
         const storeDoc = useWorkspaceStore.getState().currentDocument;
-        if (!storeDoc || storeDoc.payload.id !== boundWorkspaceId) {
-          // Stale completion from previous workspace! Ignore write to store.
-          return;
-        }
-        setFloorsInStore(updated);
+        updateFloorsForWorkspace(boundWorkspaceId, updated, storeDoc, setFloorsInStore);
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

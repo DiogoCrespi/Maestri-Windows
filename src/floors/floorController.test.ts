@@ -449,4 +449,30 @@ describe("FloorController Core Logic & Concurrency", () => {
 
     expect(maxActiveTasks).toBe(1);
   });
+
+  it("preserva prefixo UNC e normaliza case (\\\\SERVER\\Share\\Repo, //server/share/repo/, \\\\server\\SHARE\\repo) garantindo no máximo 1 mutação simultânea", async () => {
+    let activeTasks = 0;
+    let maxActiveTasks = 0;
+
+    const bridge = makeFakeBridge({
+      createFloor: vi.fn().mockImplementation(async (_root, name, branchName) => {
+        activeTasks++;
+        maxActiveTasks = Math.max(maxActiveTasks, activeTasks);
+        await new Promise((r) => setTimeout(r, 40));
+        activeTasks--;
+        return makeFakeFloor(name, name, branchName);
+      }),
+    });
+
+    const controller = new FloorController({ bridge });
+
+    // Dispara requisições simultâneas com variação de case e slashes em caminhos UNC
+    const p1 = controller.createFloor({ rootPath: "\\\\SERVER\\Share\\Repo", name: "UNC-A", branchName: "feat/unc-a" });
+    const p2 = controller.createFloor({ rootPath: "//server/share/repo/", name: "UNC-B", branchName: "feat/unc-b" });
+    const p3 = controller.createFloor({ rootPath: "\\\\server\\SHARE\\repo", name: "UNC-C", branchName: "feat/unc-c" });
+
+    await Promise.all([p1, p2, p3]);
+
+    expect(maxActiveTasks).toBe(1);
+  });
 });
