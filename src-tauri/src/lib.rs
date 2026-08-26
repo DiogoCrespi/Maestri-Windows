@@ -2,6 +2,7 @@ mod access_graph;
 mod filesystem;
 mod ipc;
 mod maestro;
+mod native_harness;
 mod notes;
 mod portal;
 mod portal_automation;

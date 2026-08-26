@@ -35,31 +35,17 @@ alerta ou filtro de “terminal ausente”. Por isso não há uma asserção de
 remoção/órfão neste E2E; esse comportamento permanece uma lacuna de produto,
 sem alteração de produção nesta rodada.
 
-## Lacunas observadas no smoke nativo
+## Quality Gate Nativo Determinístico (Windows)
 
-`scripts/Invoke-MaestroNativeSmoke.ps1` foi revisado somente em leitura. Ele
-faz preparação segura e reproduzível: valida a sintaxe PowerShell, constrói e
-verifica app/CLI, testa endpoint loopback e token (incluindo 401 e rejeição de
-endpoint não-loopback) e gera um fixture schemaVersion 2 com um terminal
-Manager. Os processos de probe iniciados pelo script têm timeout e cleanup
-limitado ao próprio script.
+A dependência frágil de UI Automation foi substituída por um quality gate nativo determinístico em Rust (`src-tauri/src/native_harness.rs`) e integrado em `scripts/Invoke-MaestroRoutineConptySmoke.ps1`.
 
-O smoke ainda não cobre automaticamente:
+Quando o toolchain nativo (cargo/Windows) está disponível, o quality gate valida deterministicamente com componentes reais (sem GUI/WebView2):
+- Criação e execução de múltiplos ConPTYs (Manager e Worker);
+- Leitura de output, escrita de input, resize de grid e encerramento limpo via `stop_all`;
+- Isolamento de credencial IPC por sessão e rejeição de falsificação entre sessões;
+- Grafo de autorização e ciclo completo de comandos Maestro (`recruit` -> `connect` -> `role` -> `dismiss`).
 
-- iniciar o executável Tauri e abrir o fixture em uma janela WebView2;
-- localizar a janela, clicar em **Abrir…** ou dirigir diálogos de arquivo;
-- criar e observar dois ConPTYs reais, incluindo output, input, resize e
-  `terminal://exited`;
-- confirmar no canvas a sequência nativa recruit → connect → role → dismiss,
-  os ACKs, a edge direta, a troca de role e a saída apenas do worker;
-- validar no backend o `command` inicial separado de `shellPath` durante o
-  recruit real;
-- testar screenshot/inspeção visual nativa ou o lifecycle da aplicação.
-
-Depois da preparação, o roteiro manual existente em
-`scripts/README-Maestro-Native-Smoke.md` continua necessário: abrir o fixture
-no app, executar recruit/connect/role/dismiss no Manager e confirmar o segundo
-ConPTY e seu encerramento.
+Se os pré-requisitos nativos estiverem ausentes no ambiente de execução, o script emite uma mensagem explícita de `SKIP` e encerra sem registrar falso positivo de sucesso.
 
 ## Comandos
 
