@@ -195,6 +195,60 @@ function New-SmokeFixture {
     }
 }
 
+function Read-ElementName {
+    param([Parameter(Mandatory = $true)]$Element)
+    try { return [string]$Element.Current.Name } catch { return "" }
+}
+
+function Find-UiElement {
+    param(
+        [Parameter(Mandatory = $true)]$Root,
+        [string]$Name = "",
+        [string]$NameContains = "",
+        [Parameter(Mandatory = $true)][System.Windows.Automation.ControlType]$ControlType
+    )
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        $ControlType
+    )
+    $elements = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    foreach ($element in $elements) {
+        $elementName = Read-ElementName -Element $element
+        if ($Name -and $elementName -eq $Name) { return $element }
+        if ($NameContains -and $elementName.IndexOf($NameContains, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $element }
+    }
+    return $null
+}
+
+function Wait-UiElement {
+    param(
+        [Parameter(Mandatory = $true)]$Root,
+        [string]$Name = "",
+        [string]$NameContains = "",
+        [Parameter(Mandatory = $true)][System.Windows.Automation.ControlType]$ControlType,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $found = Find-UiElement -Root $Root -Name $Name -NameContains $NameContains -ControlType $ControlType
+        if ($found) { return $found }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "UI element not found: type=$ControlType name='$Name' contains='$NameContains'"
+}
+
+function Invoke-UiButton {
+    param(
+        [Parameter(Mandatory = $true)]$Root,
+        [string]$Name = "",
+        [string]$NameContains = "",
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    $button = Wait-UiElement -Root $Root -Name $Name -NameContains $NameContains -ControlType ([System.Windows.Automation.ControlType]::Button) -TimeoutSeconds $TimeoutSeconds
+    $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $pattern.Invoke()
+}
+
 function Wait-FileText {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -225,6 +279,38 @@ function Wait-RoutineExecution {
     throw "Routine execution was not persisted in $Path"
 }
 
+function Open-WorkspaceThroughUi {
+    param(
+        [Parameter(Mandatory = $true)]$Window,
+        [Parameter(Mandatory = $true)][string]$Workspace,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    Add-Type -AssemblyName System.Windows.Forms
+    Invoke-UiButton -Root $Window -NameContains "Abrir" -TimeoutSeconds $TimeoutSeconds
+    # Tauri's native file picker is a separate provider/window. On Windows
+    # PowerShell 5.1 its UIA tree can disappear between FindAll calls, so use
+    # the focused file-name field instead of traversing that transient tree.
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait($Workspace)
+    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    Start-Sleep -Seconds 2
+}
+
+function Stop-StartedApp {
+    if (-not $script:startedApp) { return }
+    try {
+        if (-not $script:startedApp.HasExited) {
+            [void]$script:startedApp.CloseMainWindow()
+            [void]$script:startedApp.WaitForExit(10000)
+        }
+    } catch { }
+    try {
+        if (-not $script:startedApp.HasExited) {
+            & taskkill.exe /PID $script:startedApp.Id /T /F | Out-Null
+        }
+    } catch { }
+}
+
 function Invoke-SelfTest {
     Test-ScriptSyntax
     $selfRoot = Join-Path ([IO.Path]::GetTempPath()) ("maestri-routine-smoke-selftest-" + [Guid]::NewGuid().ToString("N"))
@@ -245,24 +331,16 @@ try {
     if ($SelfTest) { Invoke-SelfTest; exit 0 }
 
     $root = (Resolve-Path -LiteralPath $ProjectRoot).Path
-    Test-ScriptSyntax
-
-    # Check for native prerequisites (cargo executable)
-    $cargoCmd = Get-Command "cargo" -ErrorAction SilentlyContinue
-    $cargoPath = $null
-    if ($cargoCmd) {
-        $cargoPath = $cargoCmd.Source
-    } else {
-        $userCargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
-        if (Test-Path -LiteralPath $userCargo -PathType Leaf) {
-            $cargoPath = $userCargo
+    $appPath = Join-Path $root ("src-tauri\target\" + $Configuration.ToLowerInvariant() + "\open-maestri-windows.exe")
+    if (-not $SkipBuild) {
+        $buildScript = Join-Path $scriptDirectory "Build-MaestriRelease.ps1"
+        $buildArgs = @{ ProjectRoot = $root }
+        if ($Configuration -ne "Release") {
+            throw "The native routine smoke requires -Configuration Release; use -SkipBuild with a debug binary if needed."
         }
+        & $buildScript @buildArgs
     }
-
-    if (-not $cargoPath) {
-        Write-Host "[routine-smoke] SKIP: Native prerequisite missing (cargo executable not found in PATH). Skipping native ConPTY quality gate." -ForegroundColor Yellow
-        exit 0
-    }
+    Assert-Condition (Test-Path -LiteralPath $appPath -PathType Leaf) "Native app binary not found: $appPath"
 
     $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($WorkspacePath)
     if ($explicitWorkspace) {
@@ -276,22 +354,39 @@ try {
     }
     $fixture = New-SmokeFixture -Root $fixtureRoot -Overwrite ([bool]($ForceFixture -or $fixtureOwned))
     Write-Step "Fixture persisted at $($fixture.WorkspacePath)"
+    Write-Step "Starting native app; UI Automation will open the fixture."
 
-    # Execute deterministic Rust native quality gate suite
-    $manifestPath = Join-Path $root "src-tauri\Cargo.toml"
-    Assert-Condition (Test-Path -LiteralPath $manifestPath -PathType Leaf) "Cargo.toml not found: $manifestPath"
+    $startedApp = New-Object System.Diagnostics.Process
+    $startedApp.StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startedApp.StartInfo.FileName = $appPath
+    $startedApp.StartInfo.WorkingDirectory = Split-Path -Parent $appPath
+    $startedApp.StartInfo.UseShellExecute = $true
+    [void]$startedApp.Start()
+    $script:startedApp = $startedApp
+    Start-Sleep -Seconds 3
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $window = Wait-UiElement -Root ([System.Windows.Automation.AutomationElement]::RootElement) -Name "open-maestri" -ControlType ([System.Windows.Automation.ControlType]::Window) -TimeoutSeconds $TimeoutSeconds
+    Open-WorkspaceThroughUi -Window $window -Workspace $fixture.WorkspacePath -TimeoutSeconds $TimeoutSeconds
+    Wait-UiElement -Root $window -Name "Routine Smoke Manager" -ControlType ([System.Windows.Automation.ControlType]::Text) -TimeoutSeconds $TimeoutSeconds | Out-Null
 
-    Write-Step "Running native ConPTY, per-session credential, Access Graph, and Maestro cycle quality gate..."
-    & $cargoPath test --manifest-path $manifestPath --lib
-    if ($LASTEXITCODE -ne 0) {
-        throw "Native ConPTY quality gate test suite failed with exit code $LASTEXITCODE"
-    }
-
+    Invoke-UiButton -Root $window -Name "Rotinas" -TimeoutSeconds $TimeoutSeconds
+    # Reacquire the window after the overlay is mounted; Chromium/Tauri can
+    # invalidate the previous AutomationElement tree during this update.
+    $window = Wait-UiElement -Root ([System.Windows.Automation.AutomationElement]::RootElement) -Name "open-maestri" -ControlType ([System.Windows.Automation.ControlType]::Window) -TimeoutSeconds $TimeoutSeconds
+    Invoke-UiButton -Root $window -NameContains "Run" -TimeoutSeconds $TimeoutSeconds
+    Wait-FileText -Path $fixture.PreMarker -Expected "pre-run" -TimeoutSeconds $TimeoutSeconds
+    Wait-FileText -Path $fixture.CommandMarker -Expected "command" -TimeoutSeconds $TimeoutSeconds
+    $completed = Wait-RoutineExecution -Path $fixture.RoutinesPath -TimeoutSeconds $TimeoutSeconds
+    Assert-Condition ([int]$completed.executionCount -ge 1) "Scheduler did not persist executionCount."
+    Write-Step "Verified persisted scheduler state, preRunScript, command, and ConPTY output."
+    Stop-StartedApp
+    Assert-Condition $startedApp.HasExited "Native app did not exit during cleanup."
     Write-Host "[routine-smoke] PASS" -ForegroundColor Green
 } catch {
     Write-Error $_
     exit 1
 } finally {
+    Stop-StartedApp
     if ($fixtureOwned -and -not $KeepArtifacts -and $fixtureRoot -and (Test-Path -LiteralPath $fixtureRoot -PathType Container)) {
         Remove-OwnedSmokeDirectory -Path $fixtureRoot
     } elseif ($fixtureRoot) {

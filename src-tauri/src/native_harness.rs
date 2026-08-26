@@ -3,9 +3,10 @@
 //! Validates the critical Windows backend flow with real native components
 //! without requiring UI Automation or a WebView2 GUI window:
 //! 1. Multiple ConPTY sessions (real shell execution, input, output, resize, stop_all).
-//! 2. Per-session credential generation & token-checked session isolation.
+//! 2. Real MAESTRI_TOKEN capture from ConPTY process environment, valid credential assertion,
+//!    and cross-session token spoofing rejection.
 //! 3. Access graph topology, node registration, and action authorization.
-//! 4. Maestro lifecycle: recruit -> connect -> role -> dismiss.
+//! 4. Maestro command payload validation and AccessGraph authorization contract.
 
 #[cfg(test)]
 mod tests {
@@ -36,7 +37,7 @@ mod tests {
                 Some("powershell.exe".to_string()),
                 None,
                 None,
-                Some("Write-Output MANAGER_CONPTY_READY".to_string()),
+                None,
             )
             .expect("Failed to create Manager ConPTY session");
 
@@ -59,7 +60,7 @@ mod tests {
                 Some("powershell.exe".to_string()),
                 None,
                 None,
-                Some("Write-Output WORKER_CONPTY_READY".to_string()),
+                None,
             )
             .expect("Failed to create Worker ConPTY session");
 
@@ -71,7 +72,7 @@ mod tests {
             assert!(active.iter().any(|s| s.id == "manager-term-1"));
             assert!(active.iter().any(|s| s.id == "worker-term-1"));
 
-            // Input & Output Test on Manager ConPTY
+            // Input & Output Test on Manager ConPTY (exclusive match on TEST_INPUT_MGR_ECHO)
             registry
                 .write_to("manager-term-1", "Write-Output TEST_INPUT_MGR_ECHO\r\n")
                 .expect("Failed to write input to Manager ConPTY");
@@ -80,16 +81,16 @@ mod tests {
             let start = std::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_secs(5) {
                 if let Ok(output) = registry.recent_output("manager-term-1") {
-                    if output.contains("TEST_INPUT_MGR_ECHO") || output.contains("MANAGER_CONPTY_READY") {
+                    if output.contains("TEST_INPUT_MGR_ECHO") {
                         mgr_matched = true;
                         break;
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            assert!(mgr_matched, "Manager ConPTY did not produce expected output");
+            assert!(mgr_matched, "Manager ConPTY output must contain TEST_INPUT_MGR_ECHO exclusively");
 
-            // Input & Output Test on Worker ConPTY
+            // Input & Output Test on Worker ConPTY (exclusive match on TEST_INPUT_WRK_ECHO)
             registry
                 .write_to("worker-term-1", "Write-Output TEST_INPUT_WRK_ECHO\r\n")
                 .expect("Failed to write input to Worker ConPTY");
@@ -98,14 +99,14 @@ mod tests {
             let start = std::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_secs(5) {
                 if let Ok(output) = registry.recent_output("worker-term-1") {
-                    if output.contains("TEST_INPUT_WRK_ECHO") || output.contains("WORKER_CONPTY_READY") {
+                    if output.contains("TEST_INPUT_WRK_ECHO") {
                         wrk_matched = true;
                         break;
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            assert!(wrk_matched, "Worker ConPTY did not produce expected output");
+            assert!(wrk_matched, "Worker ConPTY output must contain TEST_INPUT_WRK_ECHO exclusively");
 
             // Resize Test
             let resized_mgr = crate::terminal::terminal_resize(
@@ -156,6 +157,7 @@ mod tests {
 
         #[cfg(windows)]
         {
+            // Spawn Session A
             let mgr_info = crate::terminal::terminal_create(
                 tauri::test::mock_app().handle().clone(),
                 tauri::State::respond_with({
@@ -173,6 +175,7 @@ mod tests {
             )
             .expect("Failed to create session-a");
 
+            // Spawn Session B
             let wrk_info = crate::terminal::terminal_create(
                 tauri::test::mock_app().handle().clone(),
                 tauri::State::respond_with({
@@ -190,21 +193,73 @@ mod tests {
             )
             .expect("Failed to create session-b");
 
-            assert_ne!(mgr_info.session_token, wrk_info.session_token);
+            // Echo MAESTRI_TOKEN from inside Session A ConPTY
+            registry
+                .write_to("session-a", "Write-Output \"TOKEN_A:$env:MAESTRI_TOKEN\"\r\n")
+                .expect("Failed to write token echo to session-a");
 
-            // Valid authentication for session-a
-            let valid_a = registry.validate_ipc_credentials("session-a", &format!("{:064x}", mgr_info.session_token));
-            // Expect credential check behavior: invalid token value fails constant-time comparison
+            let mut token_a = String::new();
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(5) {
+                if let Ok(output) = registry.recent_output("session-a") {
+                    if let Some(line) = output.lines().find(|l| l.contains("TOKEN_A:")) {
+                        if let Some((_, val)) = line.split_once("TOKEN_A:") {
+                            let trimmed = val.trim();
+                            if !trimmed.is_empty() {
+                                token_a = trimmed.to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            // Echo MAESTRI_TOKEN from inside Session B ConPTY
+            registry
+                .write_to("session-b", "Write-Output \"TOKEN_B:$env:MAESTRI_TOKEN\"\r\n")
+                .expect("Failed to write token echo to session-b");
+
+            let mut token_b = String::new();
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(5) {
+                if let Ok(output) = registry.recent_output("session-b") {
+                    if let Some(line) = output.lines().find(|l| l.contains("TOKEN_B:")) {
+                        if let Some((_, val)) = line.split_once("TOKEN_B:") {
+                            let trimmed = val.trim();
+                            if !trimmed.is_empty() {
+                                token_b = trimmed.to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            assert!(!token_a.is_empty(), "Captured token_a from ConPTY session-a must not be empty");
+            assert!(!token_b.is_empty(), "Captured token_b from ConPTY session-b must not be empty");
+            assert_ne!(token_a, token_b, "ConPTY session tokens must be unique per session");
+
+            // Assert valid credentials for session-a
+            let auth_a = registry.validate_ipc_credentials("session-a", &token_a);
+            assert!(auth_a.is_ok(), "Valid token_a captured from ConPTY must authenticate session-a");
+
+            // Assert valid credentials for session-b
+            let auth_b = registry.validate_ipc_credentials("session-b", &token_b);
+            assert!(auth_b.is_ok(), "Valid token_b captured from ConPTY must authenticate session-b");
+
+            // Assert invalid credentials rejected
             assert!(
                 registry.validate_ipc_credentials("session-a", "invalid_token_xyz").is_err(),
                 "Invalid credential must be rejected"
             );
 
-            // Cross-session token spoofing: passing session-b token to session-a MUST be rejected
-            let cross_spoof = registry.validate_ipc_credentials("session-a", &format!("{:064x}", wrk_info.session_token));
+            // Cross-session token spoofing: passing token_b to session-a MUST be rejected
+            let cross_spoof = registry.validate_ipc_credentials("session-a", &token_b);
             assert!(
                 cross_spoof.is_err(),
-                "Cross-session token spoofing must be rejected"
+                "Cross-session token spoofing (token_b on session-a) must be rejected"
             );
 
             registry.stop_all();
@@ -217,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_native_harness_access_graph_and_maestro_cycle() {
+    fn test_native_harness_maestro_command_payload_and_access_graph_contract() {
         let graph = AccessGraph::new();
         let registry = TerminalRegistry::new();
 
@@ -250,7 +305,7 @@ mod tests {
         let mgr_auth = graph.authorize_manager(manager_id.as_str()).expect("Manager authorization failed");
         assert!(mgr_auth.is_manager);
 
-        // 3. Maestro Recruit Cycle (Validate payload & register worker)
+        // 3. Maestro Recruit Command Payload Validation Contract
         let recruit_cmd = MaestroCommand::Recruit(MaestroRecruitPayload {
             request_id: new_request_id(),
             source_terminal_id: manager_id.to_string(),
@@ -269,7 +324,7 @@ mod tests {
             .expect("Failed to create Worker GraphNode");
         graph.upsert_node(worker_node).expect("Failed to insert Worker node");
 
-        // 4. Maestro Connect Cycle
+        // 4. Maestro Connect Command Payload Validation Contract & Graph Edge Creation
         let connect_cmd = MaestroCommand::Connect(MaestroConnectPayload {
             request_id: new_request_id(),
             actor_terminal_id: manager_id.to_string(),
@@ -286,18 +341,18 @@ mod tests {
         assert!(graph.authorize(worker_id.as_str(), AccessAction::NoteRead, note_id.as_str()).is_ok());
         assert!(graph.authorize(manager_id.as_str(), AccessAction::NoteRead, note_id.as_str()).is_err());
 
-        // 5. Maestro Role Cycle
+        // 5. Maestro Role Command Payload Validation Contract
         let role_cmd = MaestroCommand::Role(MaestroRolePayload {
             request_id: new_request_id(),
             source_terminal_id: manager_id.to_string(),
             target_terminal_id: worker_id.to_string(),
             role: "lead-builder".to_string(),
-            instructions: Some("Execute native harness verification".to_string()),
+            instructions: Some("Execute native harness contract verification".to_string()),
             color: None,
         });
         role_cmd.validate().expect("Role command payload validation failed");
 
-        // 6. Maestro Dismiss Cycle
+        // 6. Maestro Dismiss Command Payload Validation Contract & Graph Removal
         let dismiss_cmd = MaestroCommand::Dismiss(MaestroDismissPayload {
             request_id: new_request_id(),
             source_terminal_id: manager_id.to_string(),

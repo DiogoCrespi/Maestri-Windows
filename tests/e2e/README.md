@@ -37,15 +37,15 @@ sem alteração de produção nesta rodada.
 
 ## Quality Gate Nativo Determinístico (Windows)
 
-A dependência frágil de UI Automation foi substituída por um quality gate nativo determinístico em Rust (`src-tauri/src/native_harness.rs`) e integrado em `scripts/Invoke-MaestroRoutineConptySmoke.ps1`.
+O quality gate nativo backend em Rust (`src-tauri/src/native_harness.rs`) é executado deterministicamente pelo script dedicado `scripts/Invoke-NativeBackendHarness.ps1`.
 
-Quando o toolchain nativo (cargo/Windows) está disponível, o quality gate valida deterministicamente com componentes reais (sem GUI/WebView2):
-- Criação e execução de múltiplos ConPTYs (Manager e Worker);
-- Leitura de output, escrita de input, resize de grid e encerramento limpo via `stop_all`;
-- Isolamento de credencial IPC por sessão e rejeição de falsificação entre sessões;
-- Grafo de autorização e ciclo completo de comandos Maestro (`recruit` -> `connect` -> `role` -> `dismiss`).
+Quando o toolchain nativo (cargo/Windows) está disponível, o harness valida com componentes reais:
+- Criação e execução de múltiplos ConPTYs em paralelo;
+- Leitura de output (com verificação exclusiva de echo de input), escrita de input, resize de grid e encerramento limpo via `stop_all`;
+- Captura do token `MAESTRI_TOKEN` de dentro do processo ConPTY, validação de credencial por sessão e rejeição de falsificação entre sessões (cross-session spoofing);
+- Grafo de autorização e validação de payload/contrato de comandos Maestro (`recruit`, `connect`, `role`, `dismiss`).
 
-Se os pré-requisitos nativos estiverem ausentes no ambiente de execução, o script emite uma mensagem explícita de `SKIP` e encerra sem registrar falso positivo de sucesso.
+No modo padrão (Gate), a falta dos pré-requisitos nativos causa falha explícita (exit 1). Com a flag `-AllowSkip`, o script emite `SKIP` e encerra com código 0.
 
 ## Comandos
 
@@ -53,9 +53,9 @@ Se os pré-requisitos nativos estiverem ausentes no ambiente de execução, o sc
 npm run test:e2e
 ```
 
-Para a preparação nativa (fora do Playwright):
+Para a verificação nativa backend:
 
 ```powershell
-.\scripts\Invoke-MaestroNativeSmoke.ps1 -SelfTest
-.\scripts\Invoke-MaestroNativeSmoke.ps1 -FixturePath (Join-Path $env:TEMP "open-maestri-maestro-native-smoke.json") -ForceFixture
+.\scripts\Invoke-NativeBackendHarness.ps1 -SelfTest
+.\scripts\Invoke-NativeBackendHarness.ps1 -AllowSkip
 ```
