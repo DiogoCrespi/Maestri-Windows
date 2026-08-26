@@ -2,11 +2,11 @@
 //!
 //! Validates the critical Windows backend flow with real native components
 //! without requiring UI Automation or a WebView2 GUI window:
-//! 1. Multiple ConPTY sessions (real shell execution, input, output, resize, stop_all).
-//! 2. Real MAESTRI_TOKEN capture from ConPTY process environment, valid credential assertion,
-//!    and cross-session token spoofing rejection.
+//! 1. Multiple ConPTY sessions (real shell execution, input, dynamic evaluated output, resize, stop_all).
+//! 2. Real MAESTRI_TOKEN capture from ConPTY process environment, strict 64-hex regex validation,
+//!    valid credential assertion, and cross-session token spoofing rejection.
 //! 3. Access graph topology, node registration, and action authorization.
-//! 4. Maestro command payload validation and AccessGraph authorization contract.
+//! 4. Maestro command payload validation contract and AccessGraph authorization contract.
 
 #[cfg(test)]
 mod tests {
@@ -16,6 +16,10 @@ mod tests {
         MaestroRecruitPayload, MaestroRolePayload,
     };
     use crate::terminal::TerminalRegistry;
+
+    fn is_valid_ipc_token(token: &str) -> bool {
+        token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit())
+    }
 
     #[test]
     fn test_native_harness_multiple_conpty_input_output_resize_stop_all() {
@@ -72,41 +76,45 @@ mod tests {
             assert!(active.iter().any(|s| s.id == "manager-term-1"));
             assert!(active.iter().any(|s| s.id == "worker-term-1"));
 
-            // Input & Output Test on Manager ConPTY (exclusive match on TEST_INPUT_MGR_ECHO)
+            // Input & Output Test on Manager ConPTY using dynamic shell evaluation (prevents false green from input echo)
+            // Input string sent: Write-Output ("MGR_EVAL_" + (40 + 2))
+            // Evaluated output string produced by shell: MGR_EVAL_42
             registry
-                .write_to("manager-term-1", "Write-Output TEST_INPUT_MGR_ECHO\r\n")
+                .write_to("manager-term-1", "Write-Output (\"MGR_EVAL_\" + (40 + 2))\r\n")
                 .expect("Failed to write input to Manager ConPTY");
 
             let mut mgr_matched = false;
             let start = std::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_secs(5) {
                 if let Ok(output) = registry.recent_output("manager-term-1") {
-                    if output.contains("TEST_INPUT_MGR_ECHO") {
+                    if output.contains("MGR_EVAL_42") {
                         mgr_matched = true;
                         break;
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            assert!(mgr_matched, "Manager ConPTY output must contain TEST_INPUT_MGR_ECHO exclusively");
+            assert!(mgr_matched, "Manager ConPTY output must contain dynamically evaluated stdout 'MGR_EVAL_42' (not input echo)");
 
-            // Input & Output Test on Worker ConPTY (exclusive match on TEST_INPUT_WRK_ECHO)
+            // Input & Output Test on Worker ConPTY using dynamic shell evaluation
+            // Input string sent: Write-Output ("WRK_EVAL_" + (90 + 9))
+            // Evaluated output string produced by shell: WRK_EVAL_99
             registry
-                .write_to("worker-term-1", "Write-Output TEST_INPUT_WRK_ECHO\r\n")
+                .write_to("worker-term-1", "Write-Output (\"WRK_EVAL_\" + (90 + 9))\r\n")
                 .expect("Failed to write input to Worker ConPTY");
 
             let mut wrk_matched = false;
             let start = std::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_secs(5) {
                 if let Ok(output) = registry.recent_output("worker-term-1") {
-                    if output.contains("TEST_INPUT_WRK_ECHO") {
+                    if output.contains("WRK_EVAL_99") {
                         wrk_matched = true;
                         break;
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            assert!(wrk_matched, "Worker ConPTY output must contain TEST_INPUT_WRK_ECHO exclusively");
+            assert!(wrk_matched, "Worker ConPTY output must contain dynamically evaluated stdout 'WRK_EVAL_99' (not input echo)");
 
             // Resize Test
             let resized_mgr = crate::terminal::terminal_resize(
@@ -158,7 +166,7 @@ mod tests {
         #[cfg(windows)]
         {
             // Spawn Session A
-            let mgr_info = crate::terminal::terminal_create(
+            let _mgr_info = crate::terminal::terminal_create(
                 tauri::test::mock_app().handle().clone(),
                 tauri::State::respond_with({
                     let r = registry.clone();
@@ -176,7 +184,7 @@ mod tests {
             .expect("Failed to create session-a");
 
             // Spawn Session B
-            let wrk_info = crate::terminal::terminal_create(
+            let _wrk_info = crate::terminal::terminal_create(
                 tauri::test::mock_app().handle().clone(),
                 tauri::State::respond_with({
                     let r = registry.clone();
@@ -195,7 +203,7 @@ mod tests {
 
             // Echo MAESTRI_TOKEN from inside Session A ConPTY
             registry
-                .write_to("session-a", "Write-Output \"TOKEN_A:$env:MAESTRI_TOKEN\"\r\n")
+                .write_to("session-a", "Write-Output (\"TOKEN_A:\" + $env:MAESTRI_TOKEN)\r\n")
                 .expect("Failed to write token echo to session-a");
 
             let mut token_a = String::new();
@@ -205,7 +213,7 @@ mod tests {
                     if let Some(line) = output.lines().find(|l| l.contains("TOKEN_A:")) {
                         if let Some((_, val)) = line.split_once("TOKEN_A:") {
                             let trimmed = val.trim();
-                            if !trimmed.is_empty() {
+                            if is_valid_ipc_token(trimmed) {
                                 token_a = trimmed.to_string();
                                 break;
                             }
@@ -217,7 +225,7 @@ mod tests {
 
             // Echo MAESTRI_TOKEN from inside Session B ConPTY
             registry
-                .write_to("session-b", "Write-Output \"TOKEN_B:$env:MAESTRI_TOKEN\"\r\n")
+                .write_to("session-b", "Write-Output (\"TOKEN_B:\" + $env:MAESTRI_TOKEN)\r\n")
                 .expect("Failed to write token echo to session-b");
 
             let mut token_b = String::new();
@@ -227,7 +235,7 @@ mod tests {
                     if let Some(line) = output.lines().find(|l| l.contains("TOKEN_B:")) {
                         if let Some((_, val)) = line.split_once("TOKEN_B:") {
                             let trimmed = val.trim();
-                            if !trimmed.is_empty() {
+                            if is_valid_ipc_token(trimmed) {
                                 token_b = trimmed.to_string();
                                 break;
                             }
@@ -237,8 +245,15 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
-            assert!(!token_a.is_empty(), "Captured token_a from ConPTY session-a must not be empty");
-            assert!(!token_b.is_empty(), "Captured token_b from ConPTY session-b must not be empty");
+            // Strict 64-hex regex validation on captured tokens
+            assert!(
+                is_valid_ipc_token(&token_a),
+                "Captured token_a from ConPTY session-a must be a valid 64-hex string"
+            );
+            assert!(
+                is_valid_ipc_token(&token_b),
+                "Captured token_b from ConPTY session-b must be a valid 64-hex string"
+            );
             assert_ne!(token_a, token_b, "ConPTY session tokens must be unique per session");
 
             // Assert valid credentials for session-a

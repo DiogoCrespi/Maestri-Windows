@@ -44,6 +44,15 @@ function Invoke-SelfTest {
     Write-Host "[native-harness] Self-test passed." -ForegroundColor Green
 }
 
+function Stop-ProcessTree {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    try {
+        & taskkill.exe /PID $ProcessId /T /F 2>&1 | Out-Null
+    } catch {}
+}
+
+$spawnedProcess = $null
+
 try {
     if ($SelfTest) {
         Invoke-SelfTest
@@ -100,6 +109,7 @@ try {
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $processInfo
+    $spawnedProcess = $process
 
     [void]$process.Start()
     $stdOutTask = $process.StandardOutput.ReadToEndAsync()
@@ -107,7 +117,7 @@ try {
 
     $completed = $process.WaitForExit($TimeoutSeconds * 1000)
     if (-not $completed) {
-        try { $process.Kill() } catch {}
+        Stop-ProcessTree -ProcessId $process.Id
         throw "cargo test timed out after $TimeoutSeconds seconds"
     }
 
@@ -125,4 +135,8 @@ try {
 } catch {
     Write-Error $_
     exit 1
+} finally {
+    if ($spawnedProcess -and -not $spawnedProcess.HasExited) {
+        Stop-ProcessTree -ProcessId $spawnedProcess.Id
+    }
 }
