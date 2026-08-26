@@ -147,7 +147,7 @@ describe("defaultFloorBridge exact invoke signature & dynamic browser detection"
 
 describe("FloorController Core Logic & Concurrency", () => {
   it("cria Floor com sucesso repassando argumentos exatos ao bridge e atualizando lista", async () => {
-    let resolveCreate: (val: FloorEntry) => void = () => {};
+    let resolveCreate!: (val: FloorEntry | PromiseLike<FloorEntry>) => void;
     const createPromise = new Promise<FloorEntry>((res) => {
       resolveCreate = res;
     });
@@ -177,6 +177,103 @@ describe("FloorController Core Logic & Concurrency", () => {
     expect(controller.getFloors()).toEqual([created]);
     expect(bridge.createFloor).toHaveBeenCalledWith("C:\\Repo", "Feature-A", "feat/a", true, undefined);
     expect(controller.isBusy()).toBe(false);
+  });
+
+  it("usa createdFloor.hooks retornado pelo backend como fonte autoritativa em autoRunSetup", async () => {
+    // Requisição frontend sem autoRunSetup, mas o backend normaliza e retorna com autoRunSetup=true
+    const reqHooks = { setup: ["echo req"], run: [], teardown: [], autoRunSetup: false };
+    const backendCreatedFloor = makeFakeFloor("f-auth", "AuthFloor", "feat/auth");
+    backendCreatedFloor.hooks = { setup: ["echo backend"], run: [], teardown: [], autoRunSetup: true };
+
+    const bridge = makeFakeBridge({
+      createFloor: vi.fn().mockResolvedValue(backendCreatedFloor),
+      runHooks: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const controller = new FloorController({ bridge });
+    await controller.createFloor({
+      rootPath: "C:\\Repo",
+      name: "AuthFloor",
+      branchName: "feat/auth",
+      hooks: reqHooks,
+    });
+
+    // Prova que o runHooks usou o comando e a flag autoritativa do backend ("echo backend")
+    expect(bridge.runHooks).toHaveBeenCalledWith("C:\\Repo", backendCreatedFloor, "setup");
+  });
+
+  it("serializa operacoes de mutacao no mesmo workspace root normalizado (no maximo uma mutacao backend em voo)", async () => {
+    const activeMutations: string[] = [];
+    let maxConcurrentMutations = 0;
+
+    let resolveFirstCreate!: (val: FloorEntry | PromiseLike<FloorEntry>) => void;
+    const firstCreatePromise = new Promise<FloorEntry>((res) => {
+      resolveFirstCreate = res;
+    });
+
+    let resolveRemove!: (val: void | PromiseLike<void>) => void;
+    const removePromise = new Promise<void>((res) => {
+      resolveRemove = res;
+    });
+
+    const floorToDel = makeFakeFloor("f-del", "FloorToDel", "feat/del");
+
+    const bridge = makeFakeBridge({
+      createFloor: vi.fn().mockImplementation((_root, name, branch) => {
+        activeMutations.push(`create:${name}`);
+        maxConcurrentMutations = Math.max(maxConcurrentMutations, activeMutations.length);
+        if (name === "FirstFloor") {
+          return firstCreatePromise.then((res) => {
+            activeMutations.splice(activeMutations.indexOf(`create:${name}`), 1);
+            return res;
+          });
+        }
+        activeMutations.splice(activeMutations.indexOf(`create:${name}`), 1);
+        return Promise.resolve(makeFakeFloor(`id-${name}`, name, branch));
+      }),
+      removeFloor: vi.fn().mockImplementation(() => {
+        activeMutations.push(`remove:${floorToDel.name}`);
+        maxConcurrentMutations = Math.max(maxConcurrentMutations, activeMutations.length);
+        return removePromise.then(() => {
+          activeMutations.splice(activeMutations.indexOf(`remove:${floorToDel.name}`), 1);
+        });
+      }),
+      land: vi.fn().mockImplementation(async (_root, floor) => {
+        activeMutations.push(`land:${floor.name}`);
+        maxConcurrentMutations = Math.max(maxConcurrentMutations, activeMutations.length);
+        activeMutations.splice(activeMutations.indexOf(`land:${floor.name}`), 1);
+      }),
+    });
+
+    const controller = new FloorController({ bridge, initialFloors: [floorToDel] });
+
+    // Dispara 3 operações de mutação simultâneas no mesmo workspace root com variações de / e \
+    const pCreate1 = controller.createFloor({ rootPath: "C:/Repo/", name: "FirstFloor", branchName: "feat/1" });
+    const pCreate2 = controller.createFloor({ rootPath: "C:\\Repo", name: "SecondFloor", branchName: "feat/2" });
+    const pRemove = controller.removeFloor({ rootPath: "C:\\Repo\\", floor: floorToDel });
+
+    // Aguarda ciclo de microtask para garantir enfileiramento inicial
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Verifica que apenas a primeira operação de mutação está em voo no backend
+    expect(activeMutations).toEqual(["create:FirstFloor"]);
+    expect(maxConcurrentMutations).toBe(1);
+
+    // Resolve a primeira criação
+    resolveFirstCreate(makeFakeFloor("id-FirstFloor", "FirstFloor", "feat/1"));
+    await pCreate1;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Agora a segunda criação foi concluída e a remoção deve estar em voo
+    expect(activeMutations).toEqual(["remove:FloorToDel"]);
+    expect(maxConcurrentMutations).toBe(1);
+
+    resolveRemove();
+    await pRemove;
+    await pCreate2;
+
+    expect(activeMutations).toEqual([]);
+    expect(maxConcurrentMutations).toBe(1);
   });
 
   it("ordem exata do autoRunSetup: adiciona/notifica Floor retornado primeiro e depois executa runHooks(setup)", async () => {
@@ -241,11 +338,13 @@ describe("FloorController Core Logic & Concurrency", () => {
   });
 
   it("preserva mutacoes de estado externas (setFloors) ocorridas durante a espera de um create/remove", async () => {
-    let resolveRemove: () => void = () => {};
+    let resolveRemove!: (val: void | PromiseLike<void>) => void;
+    const removePromise = new Promise<void>((res) => {
+      resolveRemove = res;
+    });
+
     const bridge = makeFakeBridge({
-      removeFloor: vi.fn().mockImplementation(
-        () => new Promise((res) => { resolveRemove = res; })
-      ),
+      removeFloor: vi.fn().mockImplementation(() => removePromise),
     });
 
     const floor1 = makeFakeFloor("f-1", "Floor-1", "feat/1");

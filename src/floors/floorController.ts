@@ -45,12 +45,40 @@ export class FloorController {
   private floors: FloorEntry[];
   private onFloorsChange?: (floors: FloorEntry[]) => void;
   private pendingOperations: Set<string> = new Set();
+  private workspaceLocks: Map<string, Promise<unknown>> = new Map();
   private lastError: string | null = null;
 
   constructor(options?: FloorControllerOptions) {
     this.bridge = options?.bridge ?? defaultFloorBridge;
     this.floors = options?.initialFloors ? [...options.initialFloors] : [];
     this.onFloorsChange = options?.onFloorsChange;
+  }
+
+  private normalizeRootPath(path: string): string {
+    const trimmed = path.trim().replace(/[/\\]+/g, "/");
+    return (trimmed.length > 1 && trimmed.endsWith("/")) ? trimmed.slice(0, -1) : trimmed;
+  }
+
+  private async withWorkspaceLock<T>(rootPath: string, task: () => Promise<T>): Promise<T> {
+    const normalizedRoot = this.normalizeRootPath(rootPath);
+    const currentLock = this.workspaceLocks.get(normalizedRoot) ?? Promise.resolve();
+
+    let releaseLock: () => void = () => {};
+    const nextLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    this.workspaceLocks.set(normalizedRoot, currentLock.then(() => nextLock, () => nextLock));
+
+    try {
+      await currentLock;
+      return await task();
+    } finally {
+      releaseLock();
+      if (this.workspaceLocks.get(normalizedRoot) === nextLock) {
+        this.workspaceLocks.delete(normalizedRoot);
+      }
+    }
   }
 
   public getFloors(): FloorEntry[] {
@@ -136,33 +164,34 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      const createdFloor = await this.bridge.createFloor(
-        trimmedPath,
-        trimmedName,
-        trimmedBranch,
-        useExistingBranch,
-        hooks
-      );
-      // Aplica o resultado sobre o estado corrente para evitar perda de updates (concorrencia externa)
-      this.floors = [...this.floors.filter((f) => f.id !== createdFloor.id), createdFloor];
-      this.onFloorsChange?.(this.getFloors());
+      return await this.withWorkspaceLock(trimmedPath, async () => {
+        const createdFloor = await this.bridge.createFloor(
+          trimmedPath,
+          trimmedName,
+          trimmedBranch,
+          useExistingBranch,
+          hooks
+        );
+        // Aplica o resultado sobre o estado corrente para evitar perda de updates (concorrencia externa)
+        this.floors = [...this.floors.filter((f) => f.id !== createdFloor.id), createdFloor];
+        this.onFloorsChange?.(this.getFloors());
 
-      // Auto-run setup se configurado e com comandos de setup definidos
-      const floorHooks = createdFloor.hooks as unknown as FloorHooks | undefined;
-      const effectiveHooks = hooks ?? floorHooks;
-      if (effectiveHooks?.autoRunSetup && effectiveHooks.setup && effectiveHooks.setup.length > 0) {
-        try {
-          await this.bridge.runHooks(trimmedPath, createdFloor, "setup");
-        } catch (hookErr) {
-          const msg = `Floor '${createdFloor.name}' criado, mas falha ao executar autoRunSetup: ${
-            hookErr instanceof Error ? hookErr.message : String(hookErr)
-          }`;
-          this.lastError = msg;
-          throw new Error(msg);
+        // Fonte autoritativa do autoRunSetup é createdFloor.hooks retornado pelo backend
+        const authoritativeHooks = (createdFloor.hooks || {}) as unknown as FloorHooks;
+        if (authoritativeHooks.autoRunSetup && authoritativeHooks.setup && authoritativeHooks.setup.length > 0) {
+          try {
+            await this.bridge.runHooks(trimmedPath, createdFloor, "setup");
+          } catch (hookErr) {
+            const msg = `Floor '${createdFloor.name}' criado, mas falha ao executar autoRunSetup: ${
+              hookErr instanceof Error ? hookErr.message : String(hookErr)
+            }`;
+            this.lastError = msg;
+            throw new Error(msg);
+          }
         }
-      }
 
-      return createdFloor;
+        return createdFloor;
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
@@ -191,10 +220,12 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      await this.bridge.removeFloor(trimmedPath, floor, deleteBranch);
-      // Aplica remocao sobre o estado corrente mantendo mutacoes externas ocorridas durante a espera
-      this.floors = this.floors.filter((f) => f.id !== floor.id);
-      this.onFloorsChange?.(this.getFloors());
+      await this.withWorkspaceLock(trimmedPath, async () => {
+        await this.bridge.removeFloor(trimmedPath, floor, deleteBranch);
+        // Aplica remocao sobre o estado corrente mantendo mutacoes externas ocorridas durante a espera
+        this.floors = this.floors.filter((f) => f.id !== floor.id);
+        this.onFloorsChange?.(this.getFloors());
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
@@ -223,7 +254,9 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      await this.bridge.runHooks(trimmedPath, floor, hookType);
+      await this.withWorkspaceLock(trimmedPath, async () => {
+        await this.bridge.runHooks(trimmedPath, floor, hookType);
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
@@ -293,7 +326,9 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      await this.bridge.land(trimmedPath, floor, trimmedTarget);
+      await this.withWorkspaceLock(trimmedPath, async () => {
+        await this.bridge.land(trimmedPath, floor, trimmedTarget);
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
