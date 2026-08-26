@@ -33,9 +33,7 @@ export function floorItemToFloorEntry(item: FloorItem): FloorEntry {
 export function useFloorManager(workspaceDirectory: string) {
   const currentDocument = useWorkspaceStore((state) => state.currentDocument);
   const setFloorsInStore = useWorkspaceStore((state) => state.setFloors);
-  const addFloorEntry = useWorkspaceStore((state) => state.addFloorEntry);
-  const updateFloorHooks = useWorkspaceStore((state) => state.updateFloorHooks);
-  const removeFloorEntry = useWorkspaceStore((state) => state.removeFloorEntry);
+  const updateFloorHooksInStore = useWorkspaceStore((state) => state.updateFloorHooks);
 
   const rawFloors = useMemo(() => currentDocument?.payload.floors ?? [], [currentDocument?.payload.floors]);
   const floors: FloorItem[] = useMemo(() => rawFloors.map(floorEntryToFloorItem), [rawFloors]);
@@ -67,9 +65,9 @@ export function useFloorManager(workspaceDirectory: string) {
     [],
   );
 
-  // Sync store floors with controller
+  // Silent sync store floors into controller to break feedback loop
   useEffect(() => {
-    controller.setFloors(rawFloors);
+    controller.setFloors(rawFloors, { silent: true });
   }, [controller, rawFloors]);
 
   // Fetch current branch for ground floor
@@ -89,9 +87,9 @@ export function useFloorManager(workspaceDirectory: string) {
     };
   }, [controller, workspaceDirectory]);
 
-  // Create Floor Handler
+  // Create Floor Handler - returns Promise<FloorEntry>
   const handleCreateFloor = useCallback(
-    async (input: CreateFloorInput) => {
+    async (input: CreateFloorInput): Promise<FloorEntry> => {
       if (!workspaceDirectory) throw new Error("Diretório de trabalho não definido");
       setIsLoading(true);
       setErrorMessage(null);
@@ -102,8 +100,8 @@ export function useFloorManager(workspaceDirectory: string) {
           branchName: input.branchName,
           useExistingBranch: input.useExistingBranch,
         });
-        addFloorEntry(created);
         setIsCreateOpen(false);
+        return created;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setErrorMessage(msg);
@@ -112,16 +110,16 @@ export function useFloorManager(workspaceDirectory: string) {
         setIsLoading(false);
       }
     },
-    [addFloorEntry, controller, workspaceDirectory],
+    [controller, workspaceDirectory],
   );
 
-  // Save Hooks Handler
+  // Save Hooks Handler - returns Promise<void>
   const handleSaveHooks = useCallback(
-    async (floorId: string, hooks: FloorHooks) => {
+    async (floorId: string, hooks: FloorHooks): Promise<void> => {
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        updateFloorHooks(floorId, hooks as unknown as Record<string, unknown>);
+        updateFloorHooksInStore(floorId, hooks as unknown as Record<string, unknown>);
         setHooksFloor(null);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -131,12 +129,12 @@ export function useFloorManager(workspaceDirectory: string) {
         setIsLoading(false);
       }
     },
-    [updateFloorHooks],
+    [updateFloorHooksInStore],
   );
 
-  // Run Hooks Handler
+  // Run Hooks Handler - returns Promise<void>
   const handleRunHooks = useCallback(
-    async (floor: FloorItem, phase: HookPhase) => {
+    async (floor: FloorItem, phase: HookPhase): Promise<void> => {
       if (!workspaceDirectory) return;
       setIsLoading(true);
       setErrorMessage(null);
@@ -158,9 +156,9 @@ export function useFloorManager(workspaceDirectory: string) {
     [controller, workspaceDirectory],
   );
 
-  // Open Landing Dialog & Fetch Preview
+  // Open Landing Dialog & Fetch Preview - returns Promise<void>
   const handleOpenLanding = useCallback(
-    async (floor: FloorItem) => {
+    async (floor: FloorItem): Promise<void> => {
       setLandingFloorTarget(floor);
       setLandingDiffText("");
       setLandingSuccess(false);
@@ -184,9 +182,9 @@ export function useFloorManager(workspaceDirectory: string) {
     [controller, groundBranch, workspaceDirectory],
   );
 
-  // Perform Land Handler (Removes floor ONLY after successful land)
+  // Perform Land Handler - returns Promise<void> (Removes floor ONLY after successful land)
   const handleLandFloor = useCallback(
-    async (input: LandFloorInput) => {
+    async (input: LandFloorInput): Promise<void> => {
       if (!landingFloorTarget || !workspaceDirectory) return;
       setIsLoading(true);
       setErrorMessage(null);
@@ -204,7 +202,6 @@ export function useFloorManager(workspaceDirectory: string) {
           floor: entry,
           deleteBranch: false,
         });
-        removeFloorEntry(entry.id);
 
         setLandingSuccess(true);
         setTimeout(() => {
@@ -219,12 +216,12 @@ export function useFloorManager(workspaceDirectory: string) {
         setIsLoading(false);
       }
     },
-    [controller, landingFloorTarget, removeFloorEntry, workspaceDirectory],
+    [controller, landingFloorTarget, workspaceDirectory],
   );
 
-  // Delete Floor Handler
+  // Delete Floor Handler - returns Promise<void>
   const handleDeleteFloor = useCallback(
-    async (input: DeleteFloorInput) => {
+    async (input: DeleteFloorInput): Promise<void> => {
       if (!deleteFloorTarget || !workspaceDirectory) return;
       setIsLoading(true);
       setErrorMessage(null);
@@ -235,7 +232,6 @@ export function useFloorManager(workspaceDirectory: string) {
           floor: entry,
           deleteBranch: !input.keepBranch,
         });
-        removeFloorEntry(entry.id);
         setDeleteFloorTarget(null);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -245,7 +241,7 @@ export function useFloorManager(workspaceDirectory: string) {
         setIsLoading(false);
       }
     },
-    [controller, deleteFloorTarget, removeFloorEntry, workspaceDirectory],
+    [controller, deleteFloorTarget, workspaceDirectory],
   );
 
   return {

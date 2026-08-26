@@ -85,9 +85,11 @@ export class FloorController {
     return [...this.floors];
   }
 
-  public setFloors(floors: FloorEntry[]): void {
+  public setFloors(floors: FloorEntry[], options?: { silent?: boolean }): void {
     this.floors = [...floors];
-    this.onFloorsChange?.(this.getFloors());
+    if (!options?.silent) {
+      this.onFloorsChange?.(this.getFloors());
+    }
   }
 
   public getLastError(): string | null {

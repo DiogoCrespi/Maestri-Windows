@@ -36,9 +36,7 @@ export interface WorkspaceStoreState {
   addEdge: (edge: ReactFlowEdge) => void;
   markClean: () => void;
   setFloors: (floors: FloorEntry[], options?: { dirty?: boolean }) => void;
-  addFloorEntry: (floor: FloorEntry) => void;
   updateFloorHooks: (floorId: string, hooks: Record<string, unknown>) => void;
-  removeFloorEntry: (floorId: string) => void;
 }
 
 type NodeContentVariant =
@@ -387,55 +385,35 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   })),
   addEdge: (edge) => set((state) => ({ edges: [...state.edges, edge], isDirty: true })),
   markClean: () => set({ isDirty: false }),
-  setFloors: (floors, options) => set((state) => ({
-    currentDocument: state.currentDocument
-      ? {
-          ...state.currentDocument,
-          payload: {
-            ...state.currentDocument.payload,
-            floors: [...floors],
-            lastModifiedAt: new Date().toISOString(),
-          },
-        }
-      : state.currentDocument,
-    isDirty: options?.dirty === false ? state.isDirty : true,
-  })),
-  addFloorEntry: (floor) => set((state) => {
+  setFloors: (floors, options) => set((state) => {
     if (!state.currentDocument) return {};
-    const existing = state.currentDocument.payload.floors ?? [];
-    const updated = [...existing.filter((f) => f.id !== floor.id), floor];
+    const dirty = options?.dirty === false ? state.isDirty : true;
     return {
       currentDocument: {
         ...state.currentDocument,
         payload: {
           ...state.currentDocument.payload,
-          floors: updated,
-          lastModifiedAt: new Date().toISOString(),
+          floors: [...floors],
+          ...(options?.dirty === false ? {} : { lastModifiedAt: new Date().toISOString() }),
         },
       },
-      isDirty: true,
+      isDirty: dirty,
     };
   }),
   updateFloorHooks: (floorId, hooks) => set((state) => {
     if (!state.currentDocument) return {};
     const existing = state.currentDocument.payload.floors ?? [];
-    const updated = existing.map((f) => (f.id === floorId ? { ...f, hooks: { ...hooks } as unknown as FloorHooks } : f));
-    return {
-      currentDocument: {
-        ...state.currentDocument,
-        payload: {
-          ...state.currentDocument.payload,
-          floors: updated,
-          lastModifiedAt: new Date().toISOString(),
-        },
-      },
-      isDirty: true,
-    };
-  }),
-  removeFloorEntry: (floorId) => set((state) => {
-    if (!state.currentDocument) return {};
-    const existing = state.currentDocument.payload.floors ?? [];
-    const updated = existing.filter((f) => f.id !== floorId);
+    const updated = existing.map((f) => {
+      if (f.id !== floorId) return f;
+      const existingHooks = (f.hooks || {}) as unknown as Record<string, unknown>;
+      return {
+        ...f,
+        hooks: {
+          ...existingHooks,
+          ...hooks,
+        } as unknown as FloorHooks,
+      };
+    });
     return {
       currentDocument: {
         ...state.currentDocument,

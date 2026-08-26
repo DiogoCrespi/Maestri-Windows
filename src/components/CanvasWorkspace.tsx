@@ -1273,7 +1273,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
         onSelectFloor={floorMgr.setSelectedFloorId}
         onCreateFloorClick={() => floorMgr.setIsCreateOpen(true)}
         onConfigureHooksClick={(floor) => floorMgr.setHooksFloor(floor)}
-        onLandFloorClick={(floor) => void floorMgr.handleOpenLanding(floor)}
+        onLandFloorClick={(floor) => floorMgr.handleOpenLanding(floor)}
         onDeleteFloorClick={(floor) => floorMgr.setDeleteFloorTarget(floor)}
         onClose={() => floorMgr.setIsOverviewOpen(false)}
       />
@@ -1282,7 +1282,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
         isOpen={floorMgr.isCreateOpen}
         isSubmitting={floorMgr.isLoading}
         error={floorMgr.errorMessage}
-        onSubmit={(input) => void floorMgr.handleCreateFloor(input)}
+        onSubmit={async (input) => { await floorMgr.handleCreateFloor(input); }}
         onCancel={() => floorMgr.setIsCreateOpen(false)}
       />
 
@@ -1293,8 +1293,8 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           initialHooks={floorMgr.hooksFloor.hooks}
           isSubmitting={floorMgr.isLoading}
           error={floorMgr.errorMessage}
-          onSave={(hooks) => void floorMgr.handleSaveHooks(floorMgr.hooksFloor!.id, hooks)}
-          onRunHook={(phase) => void floorMgr.handleRunHooks(floorMgr.hooksFloor!, phase)}
+          onSave={(hooks) => floorMgr.handleSaveHooks(floorMgr.hooksFloor!.id, hooks)}
+          onRunHook={(phase) => floorMgr.handleRunHooks(floorMgr.hooksFloor!, phase)}
           onCancel={() => floorMgr.setHooksFloor(null)}
         />
       )}
@@ -1305,7 +1305,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           floor={floorMgr.deleteFloorTarget}
           isSubmitting={floorMgr.isLoading}
           error={floorMgr.errorMessage}
-          onConfirm={(input) => void floorMgr.handleDeleteFloor(input)}
+          onConfirm={(input) => floorMgr.handleDeleteFloor(input)}
           onCancel={() => floorMgr.setDeleteFloorTarget(null)}
         />
       )}
@@ -1320,7 +1320,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           isLanding={floorMgr.isLoading}
           error={floorMgr.errorMessage}
           isSuccess={floorMgr.landingSuccess}
-          onLand={(input) => void floorMgr.handleLandFloor(input)}
+          onLand={(input) => floorMgr.handleLandFloor(input)}
           onCancel={() => floorMgr.setLandingFloorTarget(null)}
         />
       )}

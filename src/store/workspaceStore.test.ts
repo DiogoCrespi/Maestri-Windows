@@ -340,41 +340,48 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect(new Date(updatedNode!.lastModifiedAt).getTime()).toBeGreaterThan(new Date(oldLastModifiedAt).getTime());
   });
 
-  it("manages floor entries in workspaceStore payload without touching nodes", () => {
+  it("manages floor entries in workspaceStore payload preserving customHookMeta and supporting dirty: false", () => {
     useWorkspaceStore.getState().loadWorkspace(testWorkspaceFixture);
-    const initialFloors = useWorkspaceStore.getState().currentDocument?.payload.floors ?? [];
-    expect(initialFloors).toEqual([]);
+    const docBefore = useWorkspaceStore.getState().currentDocument;
+    const oldLastModifiedAt = docBefore!.payload.lastModifiedAt;
+    useWorkspaceStore.setState({ isDirty: false });
 
     const newFloor = {
       id: "floor-test-1",
       name: "Feature Test",
       branchName: "feat/test",
       worktreePath: "C:\\Nestjs\\open-maestri\\.worktrees\\win-floor-test",
-      hooks: { setup: ["npm install"], run: [], teardown: [], autoRunSetup: true },
+      hooks: { setup: ["npm install"], run: [], teardown: [], autoRunSetup: true, customHookMeta: "my-custom-meta" },
       createdAt: "2026-08-26T00:00:00.000Z",
     };
 
-    useWorkspaceStore.getState().addFloorEntry(newFloor);
-    expect(useWorkspaceStore.getState().isDirty).toBe(true);
+    // Test setFloors with dirty: false
+    useWorkspaceStore.getState().setFloors([newFloor], { dirty: false });
+    expect(useWorkspaceStore.getState().isDirty).toBe(false);
+    expect(useWorkspaceStore.getState().currentDocument?.payload.lastModifiedAt).toBe(oldLastModifiedAt);
     let docFloors = useWorkspaceStore.getState().currentDocument?.payload.floors;
     expect(docFloors).toHaveLength(1);
     expect(docFloors?.[0].id).toBe("floor-test-1");
 
+    // Test updateFloorHooks preserves unknown field customHookMeta
     useWorkspaceStore.getState().updateFloorHooks("floor-test-1", {
       setup: ["npm install", "npm run build"],
       run: ["npm test"],
       teardown: [],
       autoRunSetup: false,
     });
+    expect(useWorkspaceStore.getState().isDirty).toBe(true);
     docFloors = useWorkspaceStore.getState().currentDocument?.payload.floors;
     expect(docFloors?.[0].hooks).toEqual({
       setup: ["npm install", "npm run build"],
       run: ["npm test"],
       teardown: [],
       autoRunSetup: false,
+      customHookMeta: "my-custom-meta",
     });
 
-    useWorkspaceStore.getState().removeFloorEntry("floor-test-1");
+    // Test setFloors with new list
+    useWorkspaceStore.getState().setFloors([]);
     docFloors = useWorkspaceStore.getState().currentDocument?.payload.floors;
     expect(docFloors).toHaveLength(0);
   });
