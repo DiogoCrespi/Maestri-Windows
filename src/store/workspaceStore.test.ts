@@ -301,5 +301,3 @@ describe("workspaceStore & React Flow Conversions", () => {
     expect((serialized.payload.drawings[0] as unknown as Record<string, unknown>).customDrawingAttr).toBe("hand-drawn-circle");
   });
 });
-
-
