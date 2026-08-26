@@ -1,34 +1,37 @@
 import type { FloorEntry } from "../model/workspace";
-import type { FloorBridge } from "../lib/floorBridge";
+import type { FloorBridge, FloorHooks, HookType, LandPreview } from "../lib/floorBridge";
 import { defaultFloorBridge } from "../lib/floorBridge";
 
 export interface CreateFloorParams {
+  rootPath: string;
   name: string;
   branchName: string;
-  workingDirectory: string;
+  useExistingBranch?: boolean;
+  hooks?: FloorHooks;
 }
 
 export interface RemoveFloorParams {
+  rootPath: string;
   floor: FloorEntry;
-  workingDirectory: string;
+  deleteBranch?: boolean;
 }
 
 export interface RunHooksParams {
-  hooks: string[];
+  rootPath: string;
   floor: FloorEntry;
-  workingDirectory: string;
+  hookType: HookType;
 }
 
 export interface PreviewLandParams {
+  rootPath: string;
   floor: FloorEntry;
   targetBranch: string;
-  workingDirectory: string;
 }
 
 export interface LandParams {
+  rootPath: string;
   floor: FloorEntry;
   targetBranch: string;
-  workingDirectory: string;
 }
 
 export interface FloorControllerOptions {
@@ -70,8 +73,15 @@ export class FloorController {
     return this.pendingOperations.size > 0;
   }
 
-  public async getCurrentBranch(workingDirectory: string): Promise<string> {
-    const opKey = `currentBranch:${workingDirectory}`;
+  public async getCurrentBranch(rootPath: string): Promise<string> {
+    const trimmedPath = rootPath.trim();
+    if (!trimmedPath) {
+      const msg = "Diretorio raiz (rootPath) nao pode ser vazio.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+
+    const opKey = `currentBranch:${trimmedPath}`;
     if (this.pendingOperations.has(opKey)) {
       throw new Error(`Operacao em andamento: ${opKey}`);
     }
@@ -79,7 +89,7 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      return await this.bridge.currentBranch(workingDirectory);
+      return await this.bridge.currentBranch(trimmedPath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
@@ -90,11 +100,16 @@ export class FloorController {
   }
 
   public async createFloor(params: CreateFloorParams): Promise<FloorEntry> {
-    const { name, branchName, workingDirectory } = params;
+    const { rootPath, name, branchName, useExistingBranch, hooks } = params;
+    const trimmedPath = rootPath.trim();
     const trimmedName = name.trim();
     const trimmedBranch = branchName.trim();
-    const trimmedDir = workingDirectory.trim();
 
+    if (!trimmedPath) {
+      const msg = "Diretorio raiz (rootPath) nao pode ser vazio.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
     if (!trimmedName) {
       const msg = "Nome do Floor nao pode ser vazio.";
       this.lastError = msg;
@@ -102,11 +117,6 @@ export class FloorController {
     }
     if (!trimmedBranch) {
       const msg = "Nome da branch do Floor nao pode ser vazio.";
-      this.lastError = msg;
-      throw new Error(msg);
-    }
-    if (!trimmedDir) {
-      const msg = "Diretorio de trabalho nao pode ser vazio.";
       this.lastError = msg;
       throw new Error(msg);
     }
@@ -126,9 +136,32 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      const createdFloor = await this.bridge.createFloor(trimmedName, trimmedBranch, trimmedDir);
-      this.floors = [...this.floors, createdFloor];
+      const createdFloor = await this.bridge.createFloor(
+        trimmedPath,
+        trimmedName,
+        trimmedBranch,
+        useExistingBranch,
+        hooks
+      );
+      // Aplica o resultado sobre o estado corrente para evitar perda de updates (concorrencia externa)
+      this.floors = [...this.floors.filter((f) => f.id !== createdFloor.id), createdFloor];
       this.onFloorsChange?.(this.getFloors());
+
+      // Auto-run setup se configurado e com comandos de setup definidos
+      const floorHooks = createdFloor.hooks as unknown as FloorHooks | undefined;
+      const effectiveHooks = hooks ?? floorHooks;
+      if (effectiveHooks?.autoRunSetup && effectiveHooks.setup && effectiveHooks.setup.length > 0) {
+        try {
+          await this.bridge.runHooks(trimmedPath, createdFloor, "setup");
+        } catch (hookErr) {
+          const msg = `Floor '${createdFloor.name}' criado, mas falha ao executar autoRunSetup: ${
+            hookErr instanceof Error ? hookErr.message : String(hookErr)
+          }`;
+          this.lastError = msg;
+          throw new Error(msg);
+        }
+      }
+
       return createdFloor;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -140,9 +173,16 @@ export class FloorController {
   }
 
   public async removeFloor(params: RemoveFloorParams): Promise<void> {
-    const { floor, workingDirectory } = params;
-    const opKey = `removeFloor:${floor.id}`;
+    const { rootPath, floor, deleteBranch } = params;
+    const trimmedPath = rootPath.trim();
 
+    if (!trimmedPath) {
+      const msg = "Diretorio raiz (rootPath) nao pode ser vazio.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+
+    const opKey = `removeFloor:${floor.id}`;
     if (this.pendingOperations.has(opKey)) {
       throw new Error(`Remocao do Floor '${floor.name}' ja esta em andamento.`);
     }
@@ -151,7 +191,8 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      await this.bridge.removeFloor(floor, workingDirectory);
+      await this.bridge.removeFloor(trimmedPath, floor, deleteBranch);
+      // Aplica remocao sobre o estado corrente mantendo mutacoes externas ocorridas durante a espera
       this.floors = this.floors.filter((f) => f.id !== floor.id);
       this.onFloorsChange?.(this.getFloors());
     } catch (err) {
@@ -164,18 +205,25 @@ export class FloorController {
   }
 
   public async runHooks(params: RunHooksParams): Promise<void> {
-    const { hooks, floor, workingDirectory } = params;
-    const opKey = `runHooks:${floor.id}`;
+    const { rootPath, floor, hookType } = params;
+    const trimmedPath = rootPath.trim();
 
+    if (!trimmedPath) {
+      const msg = "Diretorio raiz (rootPath) nao pode ser vazio.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+
+    const opKey = `runHooks:${floor.id}:${hookType}`;
     if (this.pendingOperations.has(opKey)) {
-      throw new Error(`Execucao de hooks para o Floor '${floor.name}' ja esta em andamento.`);
+      throw new Error(`Execucao de hook '${hookType}' para o Floor '${floor.name}' ja esta em andamento.`);
     }
 
     this.pendingOperations.add(opKey);
     this.lastError = null;
 
     try {
-      await this.bridge.runHooks(hooks, floor, workingDirectory);
+      await this.bridge.runHooks(trimmedPath, floor, hookType);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
@@ -185,10 +233,23 @@ export class FloorController {
     }
   }
 
-  public async previewLand(params: PreviewLandParams): Promise<string> {
-    const { floor, targetBranch, workingDirectory } = params;
-    const opKey = `previewLand:${floor.id}`;
+  public async previewLand(params: PreviewLandParams): Promise<LandPreview> {
+    const { rootPath, floor, targetBranch } = params;
+    const trimmedPath = rootPath.trim();
+    const trimmedTarget = targetBranch.trim();
 
+    if (!trimmedPath) {
+      const msg = "Diretorio raiz (rootPath) nao pode ser vazio.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+    if (!trimmedTarget) {
+      const msg = "Branch de destino (targetBranch) nao pode ser vazia.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+
+    const opKey = `previewLand:${floor.id}`;
     if (this.pendingOperations.has(opKey)) {
       throw new Error(`Preview de landing para o Floor '${floor.name}' ja esta em andamento.`);
     }
@@ -197,7 +258,7 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      return await this.bridge.previewLand(floor, targetBranch, workingDirectory);
+      return await this.bridge.previewLand(trimmedPath, floor, trimmedTarget);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
@@ -208,9 +269,22 @@ export class FloorController {
   }
 
   public async land(params: LandParams): Promise<void> {
-    const { floor, targetBranch, workingDirectory } = params;
-    const opKey = `land:${floor.id}`;
+    const { rootPath, floor, targetBranch } = params;
+    const trimmedPath = rootPath.trim();
+    const trimmedTarget = targetBranch.trim();
 
+    if (!trimmedPath) {
+      const msg = "Diretorio raiz (rootPath) nao pode ser vazio.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+    if (!trimmedTarget) {
+      const msg = "Branch de destino (targetBranch) nao pode ser vazia.";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
+
+    const opKey = `land:${floor.id}`;
     if (this.pendingOperations.has(opKey)) {
       throw new Error(`Landing para o Floor '${floor.name}' ja esta em andamento.`);
     }
@@ -219,7 +293,7 @@ export class FloorController {
     this.lastError = null;
 
     try {
-      await this.bridge.land(floor, targetBranch, workingDirectory);
+      await this.bridge.land(trimmedPath, floor, trimmedTarget);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;

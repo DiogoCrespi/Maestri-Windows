@@ -8,59 +8,92 @@ export interface FloorHooks {
   autoRunSetup: boolean;
 }
 
-export interface FloorBridge {
-  currentBranch: (workingDirectory: string) => Promise<string>;
-  createFloor: (name: string, branchName: string, workingDirectory: string) => Promise<FloorEntry>;
-  removeFloor: (floor: FloorEntry, workingDirectory: string) => Promise<void>;
-  runHooks: (hooks: string[], floor: FloorEntry, workingDirectory: string) => Promise<void>;
-  previewLand: (floor: FloorEntry, targetBranch: string, workingDirectory: string) => Promise<string>;
-  land: (floor: FloorEntry, targetBranch: string, workingDirectory: string) => Promise<void>;
+export interface LandPreview {
+  floorName: string;
+  floorBranch: string;
+  targetBranch: string;
+  diffStat: string;
 }
 
-const isNative = typeof window !== "undefined" && (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined;
+export type HookType = "setup" | "run" | "teardown";
 
-const BROWSER_UNAVAILABLE_ERROR = "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri).";
+export interface FloorBridge {
+  currentBranch: (rootPath: string) => Promise<string>;
+  createFloor: (
+    rootPath: string,
+    name: string,
+    branchName: string,
+    useExistingBranch?: boolean,
+    hooks?: FloorHooks
+  ) => Promise<FloorEntry>;
+  removeFloor: (rootPath: string, floor: FloorEntry, deleteBranch?: boolean) => Promise<void>;
+  runHooks: (rootPath: string, floor: FloorEntry, hookType: HookType) => Promise<void>;
+  previewLand: (rootPath: string, floor: FloorEntry, targetBranch: string) => Promise<LandPreview>;
+  land: (rootPath: string, floor: FloorEntry, targetBranch: string) => Promise<void>;
+}
+
+function checkIsNative(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined
+  );
+}
+
+const BROWSER_UNAVAILABLE_ERROR =
+  "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri).";
 
 export const defaultFloorBridge: FloorBridge = {
-  async currentBranch(workingDirectory: string) {
-    if (!isNative) {
+  async currentBranch(rootPath: string) {
+    if (!checkIsNative()) {
       throw new Error(BROWSER_UNAVAILABLE_ERROR);
     }
-    return invoke<string>("floor_current_branch", { workingDirectory });
+    return invoke<string>("floor_current_branch", { rootPath });
   },
 
-  async createFloor(name: string, branchName: string, workingDirectory: string) {
-    if (!isNative) {
+  async createFloor(
+    rootPath: string,
+    name: string,
+    branchName: string,
+    useExistingBranch?: boolean,
+    hooks?: FloorHooks
+  ) {
+    if (!checkIsNative()) {
       throw new Error(BROWSER_UNAVAILABLE_ERROR);
     }
-    return invoke<FloorEntry>("floor_create", { name, branchName, workingDirectory });
+    return invoke<FloorEntry>("floor_create", {
+      rootPath,
+      name,
+      branchName,
+      useExistingBranch: useExistingBranch ?? false,
+      hooks: hooks ?? { setup: [], run: [], teardown: [], autoRunSetup: false },
+    });
   },
 
-  async removeFloor(floor: FloorEntry, workingDirectory: string) {
-    if (!isNative) {
+  async removeFloor(rootPath: string, floor: FloorEntry, deleteBranch?: boolean) {
+    if (!checkIsNative()) {
       throw new Error(BROWSER_UNAVAILABLE_ERROR);
     }
-    await invoke("floor_remove", { floor, workingDirectory });
+    await invoke("floor_remove", { rootPath, floor, deleteBranch: deleteBranch ?? false });
   },
 
-  async runHooks(hooks: string[], floor: FloorEntry, workingDirectory: string) {
-    if (!isNative) {
+  async runHooks(rootPath: string, floor: FloorEntry, hookType: HookType) {
+    if (!checkIsNative()) {
       throw new Error(BROWSER_UNAVAILABLE_ERROR);
     }
-    await invoke("floor_run_hooks", { hooks, floor, workingDirectory });
+    await invoke("floor_run_hooks", { rootPath, floor, hookType });
   },
 
-  async previewLand(floor: FloorEntry, targetBranch: string, workingDirectory: string) {
-    if (!isNative) {
+  async previewLand(rootPath: string, floor: FloorEntry, targetBranch: string) {
+    if (!checkIsNative()) {
       throw new Error(BROWSER_UNAVAILABLE_ERROR);
     }
-    return invoke<string>("floor_preview_land", { floor, targetBranch, workingDirectory });
+    return invoke<LandPreview>("floor_preview_land", { rootPath, floor, targetBranch });
   },
 
-  async land(floor: FloorEntry, targetBranch: string, workingDirectory: string) {
-    if (!isNative) {
+  async land(rootPath: string, floor: FloorEntry, targetBranch: string) {
+    if (!checkIsNative()) {
       throw new Error(BROWSER_UNAVAILABLE_ERROR);
     }
-    await invoke("floor_land", { floor, targetBranch, workingDirectory });
+    await invoke("floor_land", { rootPath, floor, targetBranch });
   },
 };

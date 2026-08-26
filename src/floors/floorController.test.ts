@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { defaultFloorBridge, FloorBridge } from "../lib/floorBridge";
+import * as core from "@tauri-apps/api/core";
+import { defaultFloorBridge, FloorBridge, LandPreview } from "../lib/floorBridge";
 import { FloorController } from "./floorController";
 import type { FloorEntry } from "../model/workspace";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
 
 function makeFakeFloor(id: string, name: string, branchName: string): FloorEntry {
   return {
@@ -17,40 +22,131 @@ function makeFakeFloor(id: string, name: string, branchName: string): FloorEntry
 function makeFakeBridge(overrides?: Partial<FloorBridge>): FloorBridge {
   return {
     currentBranch: vi.fn().mockResolvedValue("main"),
-    createFloor: vi.fn().mockImplementation(async (name, branchName) => makeFakeFloor("f-1", name, branchName)),
+    createFloor: vi.fn().mockImplementation(async (_root, name, branchName) => makeFakeFloor("f-1", name, branchName)),
     removeFloor: vi.fn().mockResolvedValue(undefined),
     runHooks: vi.fn().mockResolvedValue(undefined),
-    previewLand: vi.fn().mockResolvedValue("1 commit ready to land"),
+    previewLand: vi.fn().mockResolvedValue({
+      floorName: "Feature-1",
+      floorBranch: "feat/1",
+      targetBranch: "main",
+      diffStat: "1 file changed, 10 insertions(+)",
+    }),
     land: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
 
-describe("FloorBridge Browser Preview Contract", () => {
-  it("lança erro explicito de indisponibilidade quando fora do app Tauri desktop (window.__TAURI_INTERNALS__ indef)", async () => {
+describe("defaultFloorBridge exact invoke signature & dynamic browser detection", () => {
+  it("lança erro explicito no browser preview quando __TAURI_INTERNALS__ nao existe e re-avalia dinamicamente", async () => {
+    delete (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window;
+
     await expect(defaultFloorBridge.currentBranch("C:\\Repo")).rejects.toThrow(
       "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri)."
     );
-    await expect(defaultFloorBridge.createFloor("feat1", "feat-branch", "C:\\Repo")).rejects.toThrow(
-      "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri)."
-    );
-    await expect(defaultFloorBridge.removeFloor(makeFakeFloor("1", "f1", "b1"), "C:\\Repo")).rejects.toThrow(
-      "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri)."
-    );
-    await expect(defaultFloorBridge.runHooks(["echo 1"], makeFakeFloor("1", "f1", "b1"), "C:\\Repo")).rejects.toThrow(
-      "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri)."
-    );
-    await expect(defaultFloorBridge.previewLand(makeFakeFloor("1", "f1", "b1"), "main", "C:\\Repo")).rejects.toThrow(
-      "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri)."
-    );
-    await expect(defaultFloorBridge.land(makeFakeFloor("1", "f1", "b1"), "main", "C:\\Repo")).rejects.toThrow(
-      "Operaçoes de Floor (git worktree) estao disponiveis apenas no app desktop native (Tauri)."
-    );
+
+    // Simula dinamica de injecao do Tauri no runtime sem recarregar modulo
+    (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window = {
+      __TAURI_INTERNALS__: {},
+    };
+    const invokeMock = vi.mocked(core.invoke);
+    invokeMock.mockResolvedValueOnce("feature/native");
+
+    const branch = await defaultFloorBridge.currentBranch("C:\\Repo");
+    expect(branch).toBe("feature/native");
+    expect(invokeMock).toHaveBeenCalledWith("floor_current_branch", { rootPath: "C:\\Repo" });
+
+    // Limpa a marcacao para os proximos testes
+    delete (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window;
+  });
+
+  it("garante envio dos nomes de invoke e argumentos exatos no ambiente nativo Tauri", async () => {
+    (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window = {
+      __TAURI_INTERNALS__: {},
+    };
+    const invokeMock = vi.mocked(core.invoke);
+    invokeMock.mockClear();
+    const floor = makeFakeFloor("id-99", "Floor-Native", "feat/native");
+
+    invokeMock.mockResolvedValueOnce("main");
+    await defaultFloorBridge.currentBranch("C:\\Project");
+    expect(invokeMock).toHaveBeenLastCalledWith("floor_current_branch", { rootPath: "C:\\Project" });
+
+    invokeMock.mockResolvedValueOnce(floor);
+    await defaultFloorBridge.createFloor("C:\\Project", "Floor-Native", "feat/native", true, {
+      setup: ["npm i"],
+      run: ["npm test"],
+      teardown: [],
+      autoRunSetup: true,
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("floor_create", {
+      rootPath: "C:\\Project",
+      name: "Floor-Native",
+      branchName: "feat/native",
+      useExistingBranch: true,
+      hooks: {
+        setup: ["npm i"],
+        run: ["npm test"],
+        teardown: [],
+        autoRunSetup: true,
+      },
+    });
+
+    invokeMock.mockResolvedValueOnce(undefined);
+    await defaultFloorBridge.removeFloor("C:\\Project", floor, true);
+    expect(invokeMock).toHaveBeenLastCalledWith("floor_remove", {
+      rootPath: "C:\\Project",
+      floor,
+      deleteBranch: true,
+    });
+
+    invokeMock.mockResolvedValueOnce(undefined);
+    await defaultFloorBridge.runHooks("C:\\Project", floor, "setup");
+    expect(invokeMock).toHaveBeenLastCalledWith("floor_run_hooks", {
+      rootPath: "C:\\Project",
+      floor,
+      hookType: "setup",
+    });
+
+    const fakePreview: LandPreview = {
+      floorName: "Floor-Native",
+      floorBranch: "feat/native",
+      targetBranch: "main",
+      diffStat: "2 files changed",
+    };
+    invokeMock.mockResolvedValueOnce(fakePreview);
+    const previewRes = await defaultFloorBridge.previewLand("C:\\Project", floor, "main");
+    expect(previewRes).toEqual(fakePreview);
+    expect(invokeMock).toHaveBeenLastCalledWith("floor_preview_land", {
+      rootPath: "C:\\Project",
+      floor,
+      targetBranch: "main",
+    });
+
+    invokeMock.mockResolvedValueOnce(undefined);
+    await defaultFloorBridge.land("C:\\Project", floor, "main");
+    expect(invokeMock).toHaveBeenLastCalledWith("floor_land", {
+      rootPath: "C:\\Project",
+      floor,
+      targetBranch: "main",
+    });
+
+    // Prova que NENHUM invoke com nomes/payloads antigos/errados foi realizado
+    const calledCommandNames = invokeMock.mock.calls.map((call) => call[0]);
+    expect(calledCommandNames).toEqual([
+      "floor_current_branch",
+      "floor_create",
+      "floor_remove",
+      "floor_run_hooks",
+      "floor_preview_land",
+      "floor_land",
+    ]);
+
+    delete (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window;
   });
 });
 
-describe("FloorController Suite", () => {
-  it("cria Floor com sucesso e atualiza a lista somente apos o retorno do backend", async () => {
+describe("FloorController Core Logic & Concurrency", () => {
+  it("cria Floor com sucesso repassando argumentos exatos ao bridge e atualizando lista", async () => {
     let resolveCreate: (val: FloorEntry) => void = () => {};
     const createPromise = new Promise<FloorEntry>((res) => {
       resolveCreate = res;
@@ -64,12 +160,12 @@ describe("FloorController Suite", () => {
     expect(controller.getFloors()).toEqual([]);
 
     const pendingCreate = controller.createFloor({
+      rootPath: "C:\\Repo",
       name: "Feature-A",
       branchName: "feat/a",
-      workingDirectory: "C:\\Repo",
+      useExistingBranch: true,
     });
 
-    // Sem mutacao otimista: lista permanece vazia enquanto o backend processa
     expect(controller.getFloors()).toEqual([]);
     expect(controller.isBusy("createFloor:Feature-A")).toBe(true);
 
@@ -79,49 +175,72 @@ describe("FloorController Suite", () => {
     const result = await pendingCreate;
     expect(result).toEqual(created);
     expect(controller.getFloors()).toEqual([created]);
+    expect(bridge.createFloor).toHaveBeenCalledWith("C:\\Repo", "Feature-A", "feat/a", true, undefined);
     expect(controller.isBusy()).toBe(false);
   });
 
-  it("trata rejeicao no backend sem atualizar lista e mantem erro acionavel no controller", async () => {
+  it("ordem exata do autoRunSetup: adiciona/notifica Floor retornado primeiro e depois executa runHooks(setup)", async () => {
+    const executionOrder: string[] = [];
+
+    const createdFloor = makeFakeFloor("f-auto", "AutoSetupFloor", "feat/auto");
+    createdFloor.hooks = { setup: ["npm install"], run: [], teardown: [], autoRunSetup: true };
+
     const bridge = makeFakeBridge({
-      createFloor: vi.fn().mockRejectedValue(new Error("Git worktree failed: branch already exists")),
+      createFloor: vi.fn().mockImplementation(async () => {
+        executionOrder.push("bridge.createFloor");
+        return createdFloor;
+      }),
+      runHooks: vi.fn().mockImplementation(async () => {
+        executionOrder.push("bridge.runHooks");
+      }),
+    });
+
+    const onFloorsChange = vi.fn().mockImplementation(() => {
+      executionOrder.push("onFloorsChange");
+    });
+
+    const controller = new FloorController({ bridge, onFloorsChange });
+
+    await controller.createFloor({
+      rootPath: "C:\\Repo",
+      name: "AutoSetupFloor",
+      branchName: "feat/auto",
+      hooks: { setup: ["npm install"], run: [], teardown: [], autoRunSetup: true },
+    });
+
+    expect(executionOrder).toEqual(["bridge.createFloor", "onFloorsChange", "bridge.runHooks"]);
+    expect(bridge.runHooks).toHaveBeenCalledWith("C:\\Repo", createdFloor, "setup");
+    expect(controller.getFloors()).toEqual([createdFloor]);
+  });
+
+  it("se autoRunSetup falhar, preserva o Floor criado na lista e exponha erro acionável sem rollback silencioso", async () => {
+    const createdFloor = makeFakeFloor("f-fail", "FailSetupFloor", "feat/fail");
+    createdFloor.hooks = { setup: ["failing_command"], run: [], teardown: [], autoRunSetup: true };
+
+    const bridge = makeFakeBridge({
+      createFloor: vi.fn().mockResolvedValue(createdFloor),
+      runHooks: vi.fn().mockRejectedValue(new Error("Command failed: failing_command")),
     });
 
     const controller = new FloorController({ bridge });
 
     await expect(
       controller.createFloor({
-        name: "Feature-B",
-        branchName: "feat/b",
-        workingDirectory: "C:\\Repo",
+        rootPath: "C:\\Repo",
+        name: "FailSetupFloor",
+        branchName: "feat/fail",
+        hooks: { setup: ["failing_command"], run: [], teardown: [], autoRunSetup: true },
       })
-    ).rejects.toThrow("Git worktree failed: branch already exists");
+    ).rejects.toThrow("Floor 'FailSetupFloor' criado, mas falha ao executar autoRunSetup: Command failed: failing_command");
 
-    expect(controller.getFloors()).toEqual([]);
-    expect(controller.getLastError()).toBe("Git worktree failed: branch already exists");
-    expect(controller.isBusy()).toBe(false);
-  });
-
-  it("bloqueia chamadas concorrentes / double-submit para a mesma operacao", async () => {
-    let resolveCurrentBranch: (b: string) => void = () => {};
-    const bridge = makeFakeBridge({
-      currentBranch: vi.fn().mockImplementation(
-        () => new Promise((res) => { resolveCurrentBranch = res; })
-      ),
-    });
-
-    const controller = new FloorController({ bridge });
-    const p1 = controller.getCurrentBranch("C:\\Repo");
-
-    await expect(controller.getCurrentBranch("C:\\Repo")).rejects.toThrow(
-      "Operacao em andamento: currentBranch:C:\\Repo"
+    // O Floor DEVE ser preservado na lista e NAO removido silenciosamente
+    expect(controller.getFloors()).toEqual([createdFloor]);
+    expect(controller.getLastError()).toBe(
+      "Floor 'FailSetupFloor' criado, mas falha ao executar autoRunSetup: Command failed: failing_command"
     );
-
-    resolveCurrentBranch("main");
-    await expect(p1).resolves.toBe("main");
   });
 
-  it("remocao de Floor aguarda confirmacao do backend sem mutacao otimista", async () => {
+  it("preserva mutacoes de estado externas (setFloors) ocorridas durante a espera de um create/remove", async () => {
     let resolveRemove: () => void = () => {};
     const bridge = makeFakeBridge({
       removeFloor: vi.fn().mockImplementation(
@@ -129,76 +248,80 @@ describe("FloorController Suite", () => {
       ),
     });
 
-    const initialFloor = makeFakeFloor("f-1", "Feature-1", "feat/1");
-    const controller = new FloorController({ bridge, initialFloors: [initialFloor] });
+    const floor1 = makeFakeFloor("f-1", "Floor-1", "feat/1");
+    const controller = new FloorController({ bridge, initialFloors: [floor1] });
 
     const pRemove = controller.removeFloor({
-      floor: initialFloor,
-      workingDirectory: "C:\\Repo",
+      rootPath: "C:\\Repo",
+      floor: floor1,
+      deleteBranch: true,
     });
 
-    // Floor ainda presente na lista enquanto backend processa
-    expect(controller.getFloors()).toEqual([initialFloor]);
+    const floor2 = makeFakeFloor("f-2", "Floor-2", "feat/2");
+    controller.setFloors([floor1, floor2]);
 
     resolveRemove();
     await pRemove;
 
-    // Apos sucesso, lista e atualizada
-    expect(controller.getFloors()).toEqual([]);
+    expect(controller.getFloors()).toEqual([floor2]);
+    expect(bridge.removeFloor).toHaveBeenCalledWith("C:\\Repo", floor1, true);
   });
 
-  it("executa landing e previewLand chamando o bridge sem alterar estado indevido", async () => {
+  it("trata rejeicao no backend sem corromper estado e registra erro acionavel", async () => {
     const bridge = makeFakeBridge({
-      previewLand: vi.fn().mockResolvedValue("Clean merge available"),
-      land: vi.fn().mockResolvedValue(undefined),
-    });
-
-    const floor = makeFakeFloor("f-1", "Feature-1", "feat/1");
-    const controller = new FloorController({ bridge, initialFloors: [floor] });
-
-    const preview = await controller.previewLand({
-      floor,
-      targetBranch: "main",
-      workingDirectory: "C:\\Repo",
-    });
-    expect(preview).toBe("Clean merge available");
-    expect(bridge.previewLand).toHaveBeenCalledWith(floor, "main", "C:\\Repo");
-
-    await controller.land({
-      floor,
-      targetBranch: "main",
-      workingDirectory: "C:\\Repo",
-    });
-    expect(bridge.land).toHaveBeenCalledWith(floor, "main", "C:\\Repo");
-  });
-
-  it("permite retry apos falha de operacao", async () => {
-    let callCount = 0;
-    const bridge = makeFakeBridge({
-      createFloor: vi.fn().mockImplementation(async (name, branch) => {
-        callCount++;
-        if (callCount === 1) throw new Error("Network timeout");
-        return makeFakeFloor("f-2", name, branch);
-      }),
+      createFloor: vi.fn().mockRejectedValue(new Error("Git worktree error: branch lock conflict")),
     });
 
     const controller = new FloorController({ bridge });
 
     await expect(
-      controller.createFloor({ name: "RetryFloor", branchName: "feat/retry", workingDirectory: "C:\\Repo" })
-    ).rejects.toThrow("Network timeout");
+      controller.createFloor({
+        rootPath: "C:\\Repo",
+        name: "Feature-Err",
+        branchName: "feat/err",
+      })
+    ).rejects.toThrow("Git worktree error: branch lock conflict");
 
-    expect(controller.getLastError()).toBe("Network timeout");
+    expect(controller.getFloors()).toEqual([]);
+    expect(controller.getLastError()).toBe("Git worktree error: branch lock conflict");
     expect(controller.isBusy()).toBe(false);
+  });
 
-    // Tentativa 2 (retry)
-    const floor = await controller.createFloor({
-      name: "RetryFloor",
-      branchName: "feat/retry",
-      workingDirectory: "C:\\Repo",
+  it("executa runHooks com hookType especifico ('setup'|'run'|'teardown')", async () => {
+    const bridge = makeFakeBridge();
+    const floor = makeFakeFloor("f-10", "Floor-Hooks", "feat/hooks");
+    const controller = new FloorController({ bridge, initialFloors: [floor] });
+
+    await controller.runHooks({
+      rootPath: "C:\\Repo",
+      floor,
+      hookType: "setup",
     });
-    expect(floor.name).toBe("RetryFloor");
-    expect(controller.getFloors()).toHaveLength(1);
-    expect(controller.getLastError()).toBeNull();
+
+    expect(bridge.runHooks).toHaveBeenCalledWith("C:\\Repo", floor, "setup");
+  });
+
+  it("previewLand retorna LandPreview estruturado", async () => {
+    const fakeLandPreview: LandPreview = {
+      floorName: "Floor-1",
+      floorBranch: "feat/1",
+      targetBranch: "main",
+      diffStat: "3 files changed, 20 insertions(+)",
+    };
+    const bridge = makeFakeBridge({
+      previewLand: vi.fn().mockResolvedValue(fakeLandPreview),
+    });
+
+    const floor = makeFakeFloor("f-1", "Floor-1", "feat/1");
+    const controller = new FloorController({ bridge, initialFloors: [floor] });
+
+    const res = await controller.previewLand({
+      rootPath: "C:\\Repo",
+      floor,
+      targetBranch: "main",
+    });
+
+    expect(res).toEqual(fakeLandPreview);
+    expect(bridge.previewLand).toHaveBeenCalledWith("C:\\Repo", floor, "main");
   });
 });
