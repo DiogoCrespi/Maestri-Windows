@@ -47,8 +47,14 @@ pub struct LandPreview {
 }
 
 fn run_git_cmd(working_dir: &Path, args: &[&str]) -> Result<String, String> {
+    let dir_str = working_dir.to_string_lossy().replace('\\', "/");
+    let safe_dir_arg = format!("safe.directory={dir_str}");
+
+    let mut full_args = vec!["-c", safe_dir_arg.as_str()];
+    full_args.extend_from_slice(args);
+
     let output = Command::new("git.exe")
-        .args(args)
+        .args(&full_args)
         .current_dir(working_dir)
         .output()
         .map_err(|e| format!("Failed to execute git.exe {:?}: {}", args, e))?;
