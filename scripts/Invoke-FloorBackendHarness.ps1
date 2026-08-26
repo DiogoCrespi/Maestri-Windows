@@ -5,24 +5,29 @@
     Validates Rust floor backend unit tests (floors::tests) in Tauri environment.
 
     HONEST DOCUMENTATION:
-    This harness script will ONLY pass the Gate once the backend floors branch
-    (feat/windows-floor-parity or equivalent) is integrated/merged into main, as the Rust
-    unit tests 'floors::tests' do not yet exist in main.
+    This harness script target is branch 'feat/windows-floors-backend' on base commit '8391225'.
+    This script will ONLY pass the Gate once the backend floors branch 'feat/windows-floors-backend'
+    is integrated/merged into main, as the Rust unit tests 'floors::tests' do not yet exist in main.
 
+.PARAMETER ProjectRoot
+    Root directory of the project. Defaults to parent of script directory ($PSScriptRoot/..).
 .PARAMETER SelfTest
-    Validates script syntax and parameter handling without executing cargo.
+    Validates script syntax using System.Management.Automation.Language.Parser without executing cargo.
 .PARAMETER AllowSkip
-    Allows returning exit code 0 with a skip message when cargo/Windows platform or tests are unavailable.
+    Allows returning exit code 0 ONLY when platform prerequisites (Windows / cargo executable) are missing.
 .PARAMETER TimeoutSeconds
-    Maximum execution timeout in seconds for cargo process. Default is 60.
+    Maximum execution timeout in seconds for cargo process. Default is 60. Range 1 to 86400.
 #>
 [CmdletBinding()]
 param(
+    [string]$ProjectRoot,
     [switch]$SelfTest,
     [switch]$AllowSkip,
+    [ValidateRange(1, 86400)]
     [int]$TimeoutSeconds = 60
 )
 
+Set-StrictMode -Version 3.0
 $ErrorActionPreference = "Stop"
 
 function Exit-WithCode {
@@ -35,42 +40,64 @@ function Exit-WithCode {
     }
 }
 
-# --- 1. SelfTest Mode ---
+# --- 1. Path Resolution ---
+if (-not $ProjectRoot) {
+    $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
+} else {
+    $ProjectRoot = (Resolve-Path $ProjectRoot).ProviderPath
+}
+
+# --- 2. SelfTest Mode ---
 if ($SelfTest) {
-    Write-Host "[SELF-TEST] Floor harness script syntax and parameter structure verified successfully."
+    $scriptPath = $PSCommandPath
+    if (-not $scriptPath) {
+        $scriptPath = Join-Path $PSScriptRoot "Invoke-FloorBackendHarness.ps1"
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
+
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Write-Host "[ERROR] SelfTest syntax parsing failed with $($parseErrors.Count) error(s):"
+        foreach ($err in $parseErrors) {
+            Write-Host "  - $($err.Message) (Line $($err.Extent.StartLineNumber), Col $($err.Extent.StartColumnNumber))"
+        }
+        Exit-WithCode -Code 1
+    }
+
+    Write-Host "[SELF-TEST] Floor harness script syntax verified with System.Management.Automation.Language.Parser (0 errors)."
     Exit-WithCode -Code 0
 }
 
-# --- 2. Platform & Cargo Availability Check ---
+# --- 3. Platform & Cargo Availability Check (Prerequisites) ---
 $isWindowsOS = $env:OS -like "*Windows*" -or $IsWindows
 $cargoCmd = Get-Command "cargo" -ErrorAction SilentlyContinue
 
 if (-not $isWindowsOS -or -not $cargoCmd) {
     if ($AllowSkip) {
-        Write-Host "[SKIP] Cargo or Windows platform not available. Skipping floor gate harness execution (-AllowSkip active)."
+        Write-Host "[SKIP] Missing prerequisite: Cargo executable or Windows platform unavailable (-AllowSkip active)."
         Exit-WithCode -Code 0
     } else {
-        Write-Host "[ERROR] Cargo or Windows platform unavailable. Rejecting false green without -AllowSkip."
+        Write-Host "[ERROR] Missing prerequisite: Cargo executable or Windows platform unavailable. Rejecting false green without -AllowSkip."
         Exit-WithCode -Code 1
     }
 }
 
-# --- 3. Process Execution & Tree Management ---
-$manifestPath = "src-tauri/Cargo.toml"
+# --- 4. Manifest Path Resolution ---
+$manifestPath = Join-Path $ProjectRoot "src-tauri/Cargo.toml"
 if (-not (Test-Path $manifestPath)) {
-    if ($AllowSkip) {
-        Write-Host "[SKIP] Manifest path '$manifestPath' not found (-AllowSkip active)."
-        Exit-WithCode -Code 0
-    } else {
-        Write-Host "[ERROR] Manifest path '$manifestPath' not found."
-        Exit-WithCode -Code 1
-    }
+    Write-Host "[ERROR] Cargo manifest path '$manifestPath' not found."
+    Exit-WithCode -Code 1
 }
 
+# --- 5. Process Execution & Safe Tree Termination ---
 $startTime = [System.DateTime]::UtcNow
+$cargoExe = $cargoCmd.Source
+
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-$pinfo.FileName = $cargoCmd.Source
-$pinfo.Arguments = "test --manifest-path $manifestPath --lib floors::tests"
+$pinfo.FileName = $cargoExe
+$pinfo.Arguments = "test --manifest-path `"$manifestPath`" --lib floors::tests"
 $pinfo.UseShellExecute = $false
 $pinfo.RedirectStandardOutput = $true
 $pinfo.RedirectStandardError = $true
@@ -79,46 +106,71 @@ $pinfo.CreateNoWindow = $true
 $proc = New-Object System.Diagnostics.Process
 $proc.StartInfo = $pinfo
 
+$started = $false
+$pidToTrack = 0
+
 try {
-    $proc.Start() | Out-Null
-} catch {
-    if ($AllowSkip) {
-        Write-Host "[SKIP] Failed to launch cargo process: $_ (-AllowSkip active)."
-        Exit-WithCode -Code 0
-    } else {
-        Write-Host "[ERROR] Failed to launch cargo process: $_"
-        Exit-WithCode -Code 1
+    $started = $proc.Start()
+    if ($started) {
+        $pidToTrack = $proc.Id
+        Write-Host "[HARNESS] Started cargo test process PID $pidToTrack at $startTime."
     }
+} catch {
+    Write-Host "[ERROR] Failed to start cargo process: $_"
+    Exit-WithCode -Code 1
 }
 
-$pidToTrack = $proc.Id
-Write-Host "[HARNESS] Started cargo test process PID $pidToTrack at $startTime."
+if (-not $started -or $pidToTrack -eq 0) {
+    Write-Host "[ERROR] Cargo process failed to start."
+    Exit-WithCode -Code 1
+}
 
 $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
 $stderrTask = $proc.StandardError.ReadToEndAsync()
+$timedOut = $false
 
-$finished = $proc.WaitForExit($TimeoutSeconds * 1000)
+try {
+    $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $finished) {
+        $timedOut = $true
+        Write-Host "[ERROR] Timeout of $TimeoutSeconds seconds exceeded while running cargo test."
+    }
+} finally {
+    if ($pidToTrack -gt 0) {
+        try {
+            if (-not $proc.HasExited) {
+                Write-Host "[HARNESS] Terminating process tree for PID $pidToTrack via taskkill.exe /PID $pidToTrack /T /F..."
+                & taskkill.exe /PID $pidToTrack /T /F | Out-Null
+            }
+        } catch {
+            # Ignore cleanup errors in finally block
+        }
+    }
+}
 
-if (-not $finished) {
-    Write-Host "[ERROR] Timeout of $TimeoutSeconds seconds exceeded. Terminating cargo process tree (PID $pidToTrack)."
-    try {
-        Start-Process -FilePath "taskkill.exe" -ArgumentList "/PID $pidToTrack /T /F" -NoNewWindow -Wait -ErrorAction SilentlyContinue
-    } catch {
-        try { $proc.Kill() } catch {}
-    }
-    if ($AllowSkip) {
-        Write-Host "[SKIP] Process timed out (-AllowSkip active)."
-        Exit-WithCode -Code 0
-    } else {
-        Exit-WithCode -Code 1
-    }
+if ($timedOut) {
+    Exit-WithCode -Code 1
 }
 
 $stdout = $stdoutTask.Result
 $stderr = $stderrTask.Result
-$output = "$stdout`n$stderr"
 
-# --- 4. Test Output & Assertion Validation ---
+# --- 6. Diagnostic Logging & Output Matching ---
+Write-Host "=== STDOUT ==="
+if ($stdout) { Write-Host $stdout } else { Write-Host "(empty)" }
+Write-Host "=== STDERR ==="
+if ($stderr) { Write-Host $stderr } else { Write-Host "(empty)" }
+Write-Host "==============="
+
+$exitCode = $proc.ExitCode
+Write-Host "[HARNESS] Cargo process exit code: $exitCode"
+
+if ($exitCode -ne 0) {
+    Write-Host "[ERROR] Cargo test execution returned non-zero exit code ($exitCode)."
+    Exit-WithCode -Code 1
+}
+
+# --- 7. Strict Test Result Assertions ---
 $requiredTests = @(
     "test_floor_create_new_branch_real_git",
     "test_floor_remove_confined_real_git",
@@ -128,40 +180,26 @@ $requiredTests = @(
 
 $missingTests = @()
 foreach ($testName in $requiredTests) {
-    if ($output -notmatch [regex]::Escape($testName)) {
+    if ($stdout -notmatch [regex]::Escape($testName)) {
         $missingTests += $testName
     }
 }
 
+# Strict match for test result line: "test result: ok. X passed;"
 $passedCount = 0
-if ($output -match "test result: ok\.\s+(\d+)\s+passed") {
-    $passedCount = [int]$matches[1]
-} elseif ($output -match "(\d+)\s+passed") {
+if ($stdout -match "test result:\s+ok\.\s+(\d+)\s+passed;") {
     $passedCount = [int]$matches[1]
 }
 
-$hasZeroTests = ($passedCount -eq 0) -or ($output -match "0 passed")
-$allTestsPresent = ($missingTests.Count -eq 0)
-$hasMinPassed = ($passedCount -ge 4)
-$isSuccess = ($proc.ExitCode -eq 0) -and $allTestsPresent -and $hasMinPassed -and (-not $hasZeroTests)
-
-if (-not $isSuccess) {
-    Write-Host "[HARNESS] Cargo exit code: $($proc.ExitCode), Passed tests count: $passedCount"
-    if ($missingTests.Count -gt 0) {
-        Write-Host "[HARNESS] Missing required test cases in output: $($missingTests -join ', ')"
-    }
-    if ($hasZeroTests) {
-        Write-Host "[HARNESS] Rejection: Zero tests executed (false green prevented)."
-    }
-
-    if ($AllowSkip) {
-        Write-Host "[SKIP] Required floor tests not present or failing on main codebase (-AllowSkip active)."
-        Exit-WithCode -Code 0
-    } else {
-        Write-Host "[ERROR] Gate validation failed. Required floor backend tests are missing or failing."
-        Exit-WithCode -Code 1
-    }
+if ($missingTests.Count -gt 0) {
+    Write-Host "[ERROR] Required test cases missing from stdout output: $($missingTests -join ', ')"
+    Exit-WithCode -Code 1
 }
 
-Write-Host "[SUCCESS] All 4 required floor backend tests passed successfully ($passedCount passed)."
+if ($passedCount -lt 4) {
+    Write-Host "[ERROR] Insufficient passed tests count: $passedCount (expected >= 4)."
+    Exit-WithCode -Code 1
+}
+
+Write-Host "[SUCCESS] Gate validation passed cleanly: All 4 required floor backend tests executed and passed ($passedCount passed)."
 Exit-WithCode -Code 0
