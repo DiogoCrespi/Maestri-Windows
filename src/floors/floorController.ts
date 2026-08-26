@@ -55,8 +55,12 @@ export class FloorController {
   }
 
   private normalizeRootPath(path: string): string {
-    const trimmed = path.trim().replace(/[/\\]+/g, "/");
-    return (trimmed.length > 1 && trimmed.endsWith("/")) ? trimmed.slice(0, -1) : trimmed;
+    let trimmed = path.trim().replace(/[/\\]+/g, "/");
+    if (trimmed.length > 1 && trimmed.endsWith("/")) {
+      trimmed = trimmed.slice(0, -1);
+    }
+    const isWindowsPath = /^[a-zA-Z]:/.test(trimmed) || /^\/\/[^/]+/.test(trimmed);
+    return isWindowsPath ? trimmed.toLowerCase() : trimmed;
   }
 
   private async withWorkspaceLock<T>(rootPath: string, task: () => Promise<T>): Promise<T> {

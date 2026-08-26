@@ -423,4 +423,30 @@ describe("FloorController Core Logic & Concurrency", () => {
     expect(res).toEqual(fakeLandPreview);
     expect(bridge.previewLand).toHaveBeenCalledWith("C:\\Repo", floor, "main");
   });
+
+  it("normaliza case-insensitivity no Windows (C:\\Repo, c:\\repo\\, C:/Repo/) garantindo no máximo 1 mutação simultânea por workspace lock", async () => {
+    let activeTasks = 0;
+    let maxActiveTasks = 0;
+
+    const bridge = makeFakeBridge({
+      createFloor: vi.fn().mockImplementation(async (_root, name, branchName) => {
+        activeTasks++;
+        maxActiveTasks = Math.max(maxActiveTasks, activeTasks);
+        await new Promise((r) => setTimeout(r, 40));
+        activeTasks--;
+        return makeFakeFloor(name, name, branchName);
+      }),
+    });
+
+    const controller = new FloorController({ bridge });
+
+    // Dispara requisições simultâneas com variação de case e slashes para o mesmo workspace
+    const p1 = controller.createFloor({ rootPath: "C:\\Repo", name: "Floor-A", branchName: "feat/a" });
+    const p2 = controller.createFloor({ rootPath: "c:\\repo\\", name: "Floor-B", branchName: "feat/b" });
+    const p3 = controller.createFloor({ rootPath: "C:/Repo/", name: "Floor-C", branchName: "feat/c" });
+
+    await Promise.all([p1, p2, p3]);
+
+    expect(maxActiveTasks).toBe(1);
+  });
 });

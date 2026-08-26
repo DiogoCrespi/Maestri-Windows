@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useWorkspaceStore } from "../../store/workspaceStore";
 import { FloorController } from "../../floors/floorController";
 import type { FloorEntry } from "../../model/workspace";
@@ -32,6 +32,7 @@ export function floorItemToFloorEntry(item: FloorItem): FloorEntry {
 
 export function useFloorManager(workspaceDirectory: string) {
   const currentDocument = useWorkspaceStore((state) => state.currentDocument);
+  const currentWorkspaceId = currentDocument?.payload.id;
   const setFloorsInStore = useWorkspaceStore((state) => state.setFloors);
   const updateFloorHooksInStore = useWorkspaceStore((state) => state.updateFloorHooks);
 
@@ -53,17 +54,27 @@ export function useFloorManager(workspaceDirectory: string) {
   const [isLoadingDiff, setIsLoadingDiff] = useState<boolean>(false);
   const [landingSuccess, setLandingSuccess] = useState<boolean>(false);
 
-  const controller = useMemo(
-    () =>
-      new FloorController({
-        initialFloors: rawFloors,
-        onFloorsChange: (updated) => {
-          setFloorsInStore(updated);
-        },
-      }),
+  const activeWorkspaceRef = useRef({ id: currentWorkspaceId, dir: workspaceDirectory });
+  useEffect(() => {
+    activeWorkspaceRef.current = { id: currentWorkspaceId, dir: workspaceDirectory };
+  }, [currentWorkspaceId, workspaceDirectory]);
+
+  // Controller scoped strictly to stable workspace identity
+  const controller = useMemo(() => {
+    const boundWorkspaceId = currentWorkspaceId;
+    return new FloorController({
+      initialFloors: rawFloors,
+      onFloorsChange: (updated) => {
+        const storeDoc = useWorkspaceStore.getState().currentDocument;
+        if (!storeDoc || storeDoc.payload.id !== boundWorkspaceId) {
+          // Stale completion from previous workspace! Ignore write to store.
+          return;
+        }
+        setFloorsInStore(updated);
+      },
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
+  }, [currentWorkspaceId, workspaceDirectory]);
 
   // Silent sync store floors into controller to break feedback loop
   useEffect(() => {
@@ -77,19 +88,24 @@ export function useFloorManager(workspaceDirectory: string) {
     controller
       .getCurrentBranch(workspaceDirectory)
       .then((branch) => {
-        if (active) setGroundBranch(branch || "main");
+        if (active && activeWorkspaceRef.current.id === currentWorkspaceId) {
+          setGroundBranch(branch || "main");
+        }
       })
       .catch(() => {
-        if (active) setGroundBranch("main");
+        if (active && activeWorkspaceRef.current.id === currentWorkspaceId) {
+          setGroundBranch("main");
+        }
       });
     return () => {
       active = false;
     };
-  }, [controller, workspaceDirectory]);
+  }, [controller, currentWorkspaceId, workspaceDirectory]);
 
   // Create Floor Handler - returns Promise<FloorEntry>
   const handleCreateFloor = useCallback(
     async (input: CreateFloorInput): Promise<FloorEntry> => {
+      const activeId = currentWorkspaceId;
       if (!workspaceDirectory) throw new Error("Diretório de trabalho não definido");
       setIsLoading(true);
       setErrorMessage(null);
@@ -100,41 +116,55 @@ export function useFloorManager(workspaceDirectory: string) {
           branchName: input.branchName,
           useExistingBranch: input.useExistingBranch,
         });
-        setIsCreateOpen(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsCreateOpen(false);
+        }
         return created;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMessage(msg);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setErrorMessage(msg);
+        }
         throw err;
       } finally {
-        setIsLoading(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsLoading(false);
+        }
       }
     },
-    [controller, workspaceDirectory],
+    [controller, currentWorkspaceId, workspaceDirectory],
   );
 
   // Save Hooks Handler - returns Promise<void>
   const handleSaveHooks = useCallback(
     async (floorId: string, hooks: FloorHooks): Promise<void> => {
+      const activeId = currentWorkspaceId;
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        updateFloorHooksInStore(floorId, hooks as unknown as Record<string, unknown>);
-        setHooksFloor(null);
+        if (activeWorkspaceRef.current.id === activeId) {
+          updateFloorHooksInStore(floorId, hooks as unknown as Record<string, unknown>);
+          setHooksFloor(null);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMessage(msg);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setErrorMessage(msg);
+        }
         throw err;
       } finally {
-        setIsLoading(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsLoading(false);
+        }
       }
     },
-    [updateFloorHooksInStore],
+    [currentWorkspaceId, updateFloorHooksInStore],
   );
 
   // Run Hooks Handler - returns Promise<void>
   const handleRunHooks = useCallback(
     async (floor: FloorItem, phase: HookPhase): Promise<void> => {
+      const activeId = currentWorkspaceId;
       if (!workspaceDirectory) return;
       setIsLoading(true);
       setErrorMessage(null);
@@ -147,18 +177,23 @@ export function useFloorManager(workspaceDirectory: string) {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMessage(msg);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setErrorMessage(msg);
+        }
         throw err;
       } finally {
-        setIsLoading(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsLoading(false);
+        }
       }
     },
-    [controller, workspaceDirectory],
+    [controller, currentWorkspaceId, workspaceDirectory],
   );
 
   // Open Landing Dialog & Fetch Preview - returns Promise<void>
   const handleOpenLanding = useCallback(
     async (floor: FloorItem): Promise<void> => {
+      const activeId = currentWorkspaceId;
       setLandingFloorTarget(floor);
       setLandingDiffText("");
       setLandingSuccess(false);
@@ -171,20 +206,27 @@ export function useFloorManager(workspaceDirectory: string) {
           floor: entry,
           targetBranch: groundBranch || "main",
         });
-        setLandingDiffText(preview.diffStat || "Sem alterações pendentes.");
+        if (activeWorkspaceRef.current.id === activeId) {
+          setLandingDiffText(preview.diffStat || "Sem alterações pendentes.");
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setLandingDiffText(`Erro ao carregar preview: ${msg}`);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setLandingDiffText(`Erro ao carregar preview: ${msg}`);
+        }
       } finally {
-        setIsLoadingDiff(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsLoadingDiff(false);
+        }
       }
     },
-    [controller, groundBranch, workspaceDirectory],
+    [controller, currentWorkspaceId, groundBranch, workspaceDirectory],
   );
 
   // Perform Land Handler - returns Promise<void> (Removes floor ONLY after successful land)
   const handleLandFloor = useCallback(
     async (input: LandFloorInput): Promise<void> => {
+      const activeId = currentWorkspaceId;
       if (!landingFloorTarget || !workspaceDirectory) return;
       setIsLoading(true);
       setErrorMessage(null);
@@ -203,25 +245,34 @@ export function useFloorManager(workspaceDirectory: string) {
           deleteBranch: false,
         });
 
-        setLandingSuccess(true);
-        setTimeout(() => {
-          setLandingFloorTarget(null);
-          setLandingSuccess(false);
-        }, 1200);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setLandingSuccess(true);
+          setTimeout(() => {
+            if (activeWorkspaceRef.current.id === activeId) {
+              setLandingFloorTarget(null);
+              setLandingSuccess(false);
+            }
+          }, 1200);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMessage(msg);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setErrorMessage(msg);
+        }
         throw err;
       } finally {
-        setIsLoading(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsLoading(false);
+        }
       }
     },
-    [controller, landingFloorTarget, workspaceDirectory],
+    [controller, currentWorkspaceId, landingFloorTarget, workspaceDirectory],
   );
 
   // Delete Floor Handler - returns Promise<void>
   const handleDeleteFloor = useCallback(
     async (input: DeleteFloorInput): Promise<void> => {
+      const activeId = currentWorkspaceId;
       if (!deleteFloorTarget || !workspaceDirectory) return;
       setIsLoading(true);
       setErrorMessage(null);
@@ -232,16 +283,22 @@ export function useFloorManager(workspaceDirectory: string) {
           floor: entry,
           deleteBranch: !input.keepBranch,
         });
-        setDeleteFloorTarget(null);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setDeleteFloorTarget(null);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMessage(msg);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setErrorMessage(msg);
+        }
         throw err;
       } finally {
-        setIsLoading(false);
+        if (activeWorkspaceRef.current.id === activeId) {
+          setIsLoading(false);
+        }
       }
     },
-    [controller, deleteFloorTarget, workspaceDirectory],
+    [controller, currentWorkspaceId, deleteFloorTarget, workspaceDirectory],
   );
 
   return {

@@ -180,4 +180,64 @@ describe("useFloorManager & FloorController Integration Tests", () => {
       }),
     ).rejects.toThrow("Branch name exists");
   });
+
+  it("ignora atualizações atrasadas (stale completion) quando o workspace ativo muda para B antes da conclusão", async () => {
+    let resolveBridge: (f: FloorEntry) => void = () => {};
+    const delayedPromise = new Promise<FloorEntry>((res) => {
+      resolveBridge = res;
+    });
+
+    vi.mocked(defaultFloorBridge.createFloor).mockReturnValueOnce(delayedPromise);
+
+    // Inicializa controller para Workspace A (id: "ws-1")
+    const controllerA = new FloorController({
+      initialFloors: [],
+      onFloorsChange: (updated) => {
+        const storeDoc = useWorkspaceStore.getState().currentDocument;
+        if (!storeDoc || storeDoc.payload.id !== "ws-1") return;
+        useWorkspaceStore.getState().setFloors(updated);
+      },
+    });
+
+    const createOp = controllerA.createFloor({
+      rootPath: "C:\\Nestjs\\open-maestri",
+      name: "Floor Workspace A",
+      branchName: "feat/ws-a",
+    });
+
+    // Antes do bridge responder, a aplicação troca o workspace ativo para Workspace B (id: "ws-2")
+    const docB = {
+      ...initialDoc,
+      payload: {
+        ...initialDoc.payload,
+        id: "ws-2",
+        name: "Workspace B",
+        floors: [],
+        lastModifiedAt: "2026-08-26T00:00:00.000Z",
+      },
+    };
+    useWorkspaceStore.setState({
+      currentDocument: docB,
+      isDirty: false,
+    });
+
+    // Agora resolve a operação atrasada do Workspace A
+    resolveBridge({
+      id: "floor-ws-a",
+      name: "Floor Workspace A",
+      branchName: "feat/ws-a",
+      worktreePath: "C:\\path\\ws-a",
+      hooks: { setup: [], run: [], teardown: [], autoRunSetup: false },
+      createdAt: "2026-08-26T00:00:00.000Z",
+    });
+
+    await createOp;
+
+    // Workspace B deve permanecer INTACTO (floors vazios, isDirty: false, timestamp idêntico)
+    const storeB = useWorkspaceStore.getState();
+    expect(storeB.currentDocument?.payload.id).toBe("ws-2");
+    expect(storeB.currentDocument?.payload.floors).toEqual([]);
+    expect(storeB.isDirty).toBe(false);
+    expect(storeB.currentDocument?.payload.lastModifiedAt).toBe("2026-08-26T00:00:00.000Z");
+  });
 });
