@@ -1,33 +1,30 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import { LocationBadge } from "./LocationBadge";
 
 describe("LocationBadge Component", () => {
   it("renders default LOCAL badge when locationType is omitted or 'local'", () => {
-    render(<LocationBadge />);
-    const badge = screen.getByRole("status");
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveTextContent("LOCAL");
-    expect(badge).toHaveAttribute("aria-label", "Ambiente de Execução: Local");
+    const html = renderToStaticMarkup(<LocationBadge />);
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-label="Ambiente de Execução: Local"');
+    expect(html).toContain("LOCAL");
+    expect(html).toContain("location-badge-local");
   });
 
   it("renders SSH badge with accessible label when locationType is 'ssh'", () => {
-    render(<LocationBadge locationType="ssh" host="192.168.1.100" />);
-    const badge = screen.getByRole("status");
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveTextContent("SSH (192.168.1.100)");
-    expect(badge).toHaveAttribute("aria-label", "Ambiente de Execução: SSH Remote");
-    expect(badge).toHaveAttribute(
-      "title",
-      "Execução remota via SSH (192.168.1.100)",
-    );
+    const html = renderToStaticMarkup(<LocationBadge locationType="ssh" host="192.168.1.100" />);
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-label="Ambiente de Execução: SSH Remote"');
+    expect(html).toContain("SSH (192.168.1.100)");
+    expect(html).toContain('title="Execução remota via SSH (192.168.1.100)"');
+    expect(html).toContain("location-badge-ssh");
   });
 
   it("handles case-insensitive locationType string gracefully", () => {
-    render(<LocationBadge locationType="SSH" />);
-    const badge = screen.getByRole("status");
-    expect(badge).toHaveTextContent("SSH");
-    expect(badge).toHaveAttribute("aria-label", "Ambiente de Execução: SSH Remote");
+    const html = renderToStaticMarkup(<LocationBadge locationType="SSH" />);
+    expect(html).toContain('aria-label="Ambiente de Execução: SSH Remote"');
+    expect(html).toContain("SSH");
+    expect(html).toContain("location-badge-ssh");
   });
 });
