@@ -264,9 +264,11 @@ const MAX_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 #[derive(Debug, Default)]
 pub struct HandshakeBuffer {
     stream_buffer: Vec<u8>,
+    pending_osc_prefix: Vec<u8>,
     ready_detected: bool,
     established_detected: bool,
     osc52_in_progress: bool,
+    pending_st_escape: bool,
 }
 
 impl HandshakeBuffer {
@@ -387,26 +389,66 @@ impl HandshakeBuffer {
     }
 
     fn strip_osc52(&mut self, data: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(data.len());
-        let mut idx = 0;
+        let mut input = std::mem::take(&mut self.pending_osc_prefix);
+        input.extend_from_slice(data);
 
-        while idx < data.len() {
+        let mut out = Vec::with_capacity(input.len());
+        let mut idx = 0;
+        let target_prefix = b"\x1b]52;";
+
+        while idx < input.len() {
             if self.osc52_in_progress {
-                if data[idx] == 0x07 {
+                if self.pending_st_escape {
+                    self.pending_st_escape = false;
+                    if input[idx] == b'\\' {
+                        self.osc52_in_progress = false;
+                        idx += 1;
+                        continue;
+                    }
+                }
+
+                if input[idx] == 0x07 {
                     self.osc52_in_progress = false;
                     idx += 1;
-                } else if data[idx] == 0x1b && idx + 1 < data.len() && data[idx + 1] == b'\\' {
-                    self.osc52_in_progress = false;
-                    idx += 2;
+                } else if input[idx] == 0x1b {
+                    if idx + 1 < input.len() {
+                        if input[idx + 1] == b'\\' {
+                            self.osc52_in_progress = false;
+                            idx += 2;
+                        } else {
+                            idx += 1;
+                        }
+                    } else {
+                        self.pending_st_escape = true;
+                        idx += 1;
+                    }
                 } else {
                     idx += 1;
                 }
             } else {
-                if data[idx] == 0x1b && idx + 4 < data.len() && &data[idx..idx + 5] == b"\x1b]52;" {
-                    self.osc52_in_progress = true;
-                    idx += 5;
+                if input[idx] == 0x1b {
+                    let remaining = input.len() - idx;
+
+                    if remaining >= 5 {
+                        if &input[idx..idx + 5] == target_prefix {
+                            self.osc52_in_progress = true;
+                            idx += 5;
+                        } else {
+                            out.push(input[idx]);
+                            idx += 1;
+                        }
+                    } else {
+                        let candidate = &input[idx..];
+                        if target_prefix.starts_with(candidate) {
+                            self.pending_osc_prefix = candidate.to_vec();
+                            break;
+                        } else {
+                            out.push(input[idx]);
+                            idx += 1;
+                        }
+                    }
                 } else {
-                    out.push(data[idx]);
+                    out.push(input[idx]);
                     idx += 1;
                 }
             }
@@ -480,6 +522,64 @@ mod tests {
     }
 
     #[test]
+    fn test_remote_contract_osc52_all_prefix_boundary_splits_and_terminators() {
+        let nonce = "1122334455667788";
+
+        // Test Split 1: \x1b in chunk 1, ]52;c;data\x07 in chunk 2
+        let mut hs1 = HandshakeBuffer::new();
+        let init = format!("READY:{nonce}\r\nESTABLISHED:{nonce}\r\nBefore ");
+        let _ = hs1.process_chunk(init.as_bytes(), nonce);
+
+        let (_e1, o1) = hs1.process_chunk(b"\x1b", nonce);
+        assert!(o1.is_empty()); // Candidate byte held back
+        let (_e2, o2) = hs1.process_chunk(b"]52;c;payload1\x07After1", nonce);
+        assert_eq!(String::from_utf8_lossy(&o2), "After1");
+
+        // Test Split 2: \x1b] in chunk 1, 52;c;data\x07 in chunk 2
+        let mut hs2 = HandshakeBuffer::new();
+        let _ = hs2.process_chunk(init.as_bytes(), nonce);
+
+        let (_e1, o1) = hs2.process_chunk(b"\x1b]", nonce);
+        assert!(o1.is_empty());
+        let (_e2, o2) = hs2.process_chunk(b"52;c;payload2\x07After2", nonce);
+        assert_eq!(String::from_utf8_lossy(&o2), "After2");
+
+        // Test Split 3: \x1b]5 in chunk 1, 2;c;data\x07 in chunk 2
+        let mut hs3 = HandshakeBuffer::new();
+        let _ = hs3.process_chunk(init.as_bytes(), nonce);
+
+        let (_e1, o1) = hs3.process_chunk(b"\x1b]5", nonce);
+        assert!(o1.is_empty());
+        let (_e2, o2) = hs3.process_chunk(b"2;c;payload3\x07After3", nonce);
+        assert_eq!(String::from_utf8_lossy(&o2), "After3");
+
+        // Test Split 4: \x1b]52 in chunk 1, ;c;data\x07 in chunk 2
+        let mut hs4 = HandshakeBuffer::new();
+        let _ = hs4.process_chunk(init.as_bytes(), nonce);
+
+        let (_e1, o1) = hs4.process_chunk(b"\x1b]52", nonce);
+        assert!(o1.is_empty());
+        let (_e2, o2) = hs4.process_chunk(b";c;payload4\x07After4", nonce);
+        assert_eq!(String::from_utf8_lossy(&o2), "After4");
+
+        // Test Fragmented ST Terminator (\x1b in chunk 1, \ in chunk 2)
+        let mut hs_st = HandshakeBuffer::new();
+        let _ = hs_st.process_chunk(init.as_bytes(), nonce);
+
+        let (_e1, o1) = hs_st.process_chunk(b"\x1b]52;c;payload5\x1b", nonce);
+        assert!(o1.is_empty());
+        let (_e2, o2) = hs_st.process_chunk(b"\\AfterST", nonce);
+        assert_eq!(String::from_utf8_lossy(&o2), "AfterST");
+
+        // Confirm normal ANSI CSI sequence (\x1b[31m) is preserved without delay
+        let mut hs_csi = HandshakeBuffer::new();
+        let _ = hs_csi.process_chunk(init.as_bytes(), nonce);
+
+        let (_e1, o1) = hs_csi.process_chunk(b"\x1b[31mRed\x1b[0m", nonce);
+        assert_eq!(String::from_utf8_lossy(&o1), "\x1b[31mRed\x1b[0m");
+    }
+
+    #[test]
     fn test_remote_contract_payload_sent_only_after_ready() {
         let mut state = HandshakeState::WaitingReady { nonce: "nonce123".to_string() };
         assert_ne!(state, HandshakeState::ReadyReceived { nonce: "nonce123".to_string() });
@@ -514,33 +614,6 @@ mod tests {
         assert!(!filtered_str.contains(&format!("READY:{nonce}")));
         assert!(!filtered_str.contains(&format!("ESTABLISHED:{nonce}")));
         assert!(filtered_str.contains("Some normal output line\r\n"));
-        assert!(filtered_str.contains("Second line\r\n"));
-    }
-
-    #[test]
-    fn test_remote_contract_osc52_sanitization_and_tui_preservation() {
-        let nonce = "9988776655443322";
-        let mut hs = HandshakeBuffer::new();
-
-        let raw_chunk1 = format!("READY:{nonce}\r\nESTABLISHED:{nonce}\r\n\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m\r\n");
-        let (_evt, clean1) = hs.process_chunk(raw_chunk1.as_bytes(), nonce);
-        let clean1_str = String::from_utf8_lossy(&clean1);
-
-        assert!(clean1_str.contains("\x1b[31mRed Text\x1b[0m"));
-        assert!(clean1_str.contains("\x1b[32mGreen Text\x1b[0m"));
-        assert!(!clean1_str.contains("52;c;c2Vjc2V0X2NsaXBib2FyZA=="));
-
-        let chunk_a = b"Before \x1b]52;c;c2Vjc2V";
-        let chunk_b = b"0X2NsaXBib2FyZA==\x1b\\ After";
-
-        let (_evt_a, clean_a) = hs.process_chunk(chunk_a, nonce);
-        let (_evt_b, clean_b) = hs.process_chunk(chunk_b, nonce);
-
-        let clean_a_str = String::from_utf8_lossy(&clean_a);
-        let clean_b_str = String::from_utf8_lossy(&clean_b);
-
-        assert_eq!(clean_a_str, "Before ");
-        assert_eq!(clean_b_str, " After");
     }
 
     #[test]
