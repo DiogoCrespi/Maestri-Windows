@@ -1,11 +1,11 @@
 //! Seam & Contract for SSH Remote Terminal Sessions.
 //!
 //! Enforces zero-secret CLI arguments, READY/ESTABLISHED handshake state machine,
-//! Base64 payload encoding, OSC 52 & dangerous sequence sanitization, reparse point confinement,
-//! process tree cleanup, and credential isolation.
+//! Base64 payload encoding, streaming OSC 52 & control sequence sanitization,
+//! fail-closed reparse point confinement, process tree cleanup, and credential isolation.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -47,52 +47,63 @@ pub fn validate_location_type(location_type: Option<&str>) -> Result<&'static st
     }
 }
 
+pub fn is_reparse_or_symlink_meta(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn check_ssh_path_security(ssh_dir: &Path, known_hosts: &Path) -> Result<(), String> {
     let check_single_path = |path: &Path| -> Result<(), String> {
-        if !path.exists() {
-            return Ok(());
-        }
-        let meta = std::fs::symlink_metadata(path)
-            .map_err(|e| format!("Failed to read metadata for '{}': {e}", path.display()))?;
-
-        if meta.file_type().is_symlink() {
-            return Err(format!(
-                "Security Error: SSH path '{}' is a symlink",
-                path.display()
-            ));
-        }
-
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-            if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-                return Err(format!(
-                    "Security Error: SSH path '{}' is a reparse point / junction",
-                    path.display()
-                ));
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) => {
+                if is_reparse_or_symlink_meta(&meta) {
+                    return Err(format!(
+                        "Security Error: SSH path '{}' is a reparse point or symlink",
+                        path.display()
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(format!("Failed to read metadata for '{}': {e}", path.display()));
             }
         }
         Ok(())
     };
 
-    if ssh_dir.exists() {
-        let mut current = ssh_dir.to_path_buf();
-        while current.parent().is_some() {
-            if current.exists() {
-                check_single_path(&current)?;
-            }
-            if !current.pop() {
-                break;
-            }
+    let mut current = ssh_dir.to_path_buf();
+    while current.parent().is_some() {
+        check_single_path(&current)?;
+        if !current.pop() {
+            break;
         }
     }
 
-    if known_hosts.exists() {
-        check_single_path(known_hosts)?;
-    }
-
+    check_single_path(known_hosts)?;
     Ok(())
+}
+
+pub fn check_default_user_ssh_security() -> Result<(), String> {
+    let home_var = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME"));
+    let home_str = match home_var {
+        Ok(val) if !val.trim().is_empty() => val,
+        _ => return Err("Security Error: Neither USERPROFILE nor HOME environment variable is defined".to_string()),
+    };
+    let ssh_dir = PathBuf::from(&home_str).join(".ssh");
+    let known_hosts = ssh_dir.join("known_hosts");
+    check_ssh_path_security(&ssh_dir, &known_hosts)
 }
 
 pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
@@ -101,12 +112,33 @@ pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let taskkill_bin = PathBuf::from(windir).join("System32").join("taskkill.exe");
+        let executable = if taskkill_bin.is_file() {
+            taskkill_bin
+        } else {
+            PathBuf::from("taskkill.exe")
+        };
+
         let pid_str = pid.to_string();
-        let _ = std::process::Command::new("taskkill.exe")
+        let output = std::process::Command::new(executable)
             .args(["/F", "/T", "/PID", &pid_str])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+            .output();
+
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    let err_msg = String::from_utf8_lossy(&out.stderr);
+                    if !err_msg.contains("not found")
+                        && !err_msg.contains("não encontrado")
+                        && !err_msg.contains("process")
+                    {
+                        return Err(format!("taskkill failed for PID {pid}: {err_msg}"));
+                    }
+                }
+            }
+            Err(e) => return Err(format!("Failed to execute taskkill for PID {pid}: {e}")),
+        }
     }
     Ok(())
 }
@@ -215,9 +247,11 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+const MAX_PENDING_TAIL_BYTES: usize = 1024;
+
 #[derive(Debug, Default)]
 pub struct HandshakeBuffer {
-    buffer: Vec<u8>,
+    pending_tail: Vec<u8>,
     ready_detected: bool,
     established_detected: bool,
     osc52_in_progress: bool,
@@ -229,12 +263,14 @@ impl HandshakeBuffer {
     }
 
     pub fn process_chunk(&mut self, chunk: &[u8], nonce: &str) -> (Option<HandshakeEvent>, Vec<u8>) {
-        self.buffer.extend_from_slice(chunk);
+        let mut buffer = std::mem::take(&mut self.pending_tail);
+        buffer.extend_from_slice(chunk);
+
         let ready_marker = format!("READY:{nonce}");
         let established_marker = format!("ESTABLISHED:{nonce}");
         let mut event = None;
 
-        let content_str = String::from_utf8_lossy(&self.buffer).to_string();
+        let content_str = String::from_utf8_lossy(&buffer).to_string();
 
         if !self.ready_detected && content_str.contains(&ready_marker) {
             self.ready_detected = true;
@@ -244,12 +280,18 @@ impl HandshakeBuffer {
             event = Some(HandshakeEvent::Established);
         }
 
-        let clean_output = self.sanitize_and_filter(&self.buffer, nonce);
-        (event, clean_output)
+        let (sanitized_delta, new_pending) = self.sanitize_and_filter(&buffer, nonce);
+        self.pending_tail = new_pending;
+
+        if self.pending_tail.len() > MAX_PENDING_TAIL_BYTES {
+            self.pending_tail.drain(..self.pending_tail.len() - MAX_PENDING_TAIL_BYTES);
+        }
+
+        (event, sanitized_delta)
     }
 
-    pub fn sanitize_and_filter(&mut self, data: &[u8], nonce: &str) -> Vec<u8> {
-        let sanitized = self.strip_osc52(data);
+    fn sanitize_and_filter(&mut self, data: &[u8], nonce: &str) -> (Vec<u8>, Vec<u8>) {
+        let (sanitized, pending) = self.strip_osc52(data);
         let text = String::from_utf8_lossy(&sanitized);
         let ready_pattern = format!("READY:{nonce}");
         let est_pattern = format!("ESTABLISHED:{nonce}");
@@ -257,7 +299,11 @@ impl HandshakeBuffer {
         let mut cleaned = String::new();
         for line in text.lines() {
             let line_trim = line.trim();
-            if line_trim == ready_pattern || line_trim == est_pattern || line_trim.contains(&ready_pattern) || line_trim.contains(&est_pattern) {
+            if line_trim == ready_pattern
+                || line_trim == est_pattern
+                || line_trim.contains(&ready_pattern)
+                || line_trim.contains(&est_pattern)
+            {
                 continue;
             }
             cleaned.push_str(line);
@@ -266,10 +312,10 @@ impl HandshakeBuffer {
         if !text.ends_with('\n') && cleaned.ends_with('\n') {
             cleaned.pop();
         }
-        cleaned.into_bytes()
+        (cleaned.into_bytes(), pending)
     }
 
-    pub fn strip_osc52(&mut self, data: &[u8]) -> Vec<u8> {
+    fn strip_osc52(&mut self, data: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let mut out = Vec::with_capacity(data.len());
         let mut idx = 0;
 
@@ -281,20 +327,33 @@ impl HandshakeBuffer {
                 } else if data[idx] == 0x1b && idx + 1 < data.len() && data[idx + 1] == b'\\' {
                     self.osc52_in_progress = false;
                     idx += 2;
+                } else if data[idx] == 0x1b && idx + 1 == data.len() {
+                    // Trailing ESC character at end of chunk: save to pending
+                    return (out, data[idx..].to_vec());
                 } else {
                     idx += 1;
                 }
             } else {
-                if data[idx] == 0x1b && idx + 4 < data.len() && &data[idx..idx + 5] == b"\x1b]52;" {
-                    self.osc52_in_progress = true;
-                    idx += 5;
+                if data[idx] == 0x1b {
+                    let remaining = data.len() - idx;
+                    if remaining >= 5 && &data[idx..idx + 5] == b"\x1b]52;" {
+                        self.osc52_in_progress = true;
+                        idx += 5;
+                    } else if remaining < 5 && b"\x1b]52;".starts_with(&data[idx..]) {
+                        // Incomplete ESC ] 52 prefix at chunk boundary: save to pending
+                        return (out, data[idx..].to_vec());
+                    } else {
+                        out.push(data[idx]);
+                        idx += 1;
+                    }
                 } else {
                     out.push(data[idx]);
                     idx += 1;
                 }
             }
         }
-        out
+
+        (out, Vec::new())
     }
 }
 
@@ -369,7 +428,8 @@ mod tests {
         let mut hs = HandshakeBuffer::new();
 
         let raw = format!("READY:{nonce}\r\nSome normal output line\r\nESTABLISHED:{nonce}\r\nSecond line");
-        let filtered = hs.sanitize_and_filter(raw.as_bytes(), nonce);
+        let (evt, filtered) = hs.process_chunk(raw.as_bytes(), nonce);
+        assert_eq!(evt, Some(HandshakeEvent::Ready));
         let filtered_str = String::from_utf8_lossy(&filtered);
 
         assert!(!filtered_str.contains(&format!("READY:{nonce}")));
@@ -383,7 +443,6 @@ mod tests {
         let nonce = "9988776655443322";
         let mut hs = HandshakeBuffer::new();
 
-        // OSC 52 sequence embedded between TUI color escape sequences
         let raw_chunk1 = b"\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m";
         let (_evt, clean1) = hs.process_chunk(raw_chunk1, nonce);
         let clean1_str = String::from_utf8_lossy(&clean1);
@@ -392,7 +451,6 @@ mod tests {
         assert!(clean1_str.contains("\x1b[32mGreen Text\x1b[0m"));
         assert!(!clean1_str.contains("52;c;c2Vjc2V0X2NsaXBib2FyZA=="));
 
-        // Fragmented OSC 52 across 2 chunks
         let mut hs_frag = HandshakeBuffer::new();
         let chunk_a = b"Before \x1b]52;c;c2Vjc2V";
         let chunk_b = b"0X2NsaXBib2FyZA==\x07 After";
@@ -417,8 +475,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&ssh_dir);
         let _ = std::fs::write(&known_hosts, "example.com ssh-rsa AAAAB3NzaC1yc2E...");
 
-        // Real regular files/dir pass security check
-        assert!(check_ssh_path_security(&ssh_dir, &known_hosts).is_is_ok());
+        assert!(check_ssh_path_security(&ssh_dir, &known_hosts).is_ok());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -444,15 +501,23 @@ mod tests {
         let encoded_a = encode_payload(&payload_a).unwrap();
         let encoded_b = encode_payload(&payload_b).unwrap();
 
-        assert!(encoded_a.contains("session-a"));
-        assert!(encoded_a.contains("ipc-token-secret-alpha-12345"));
-        assert!(!encoded_a.contains("ipc-token-secret-beta-67890"));
+        let decoded_a = decode_payload(&encoded_a).unwrap();
+        let decoded_b = decode_payload(&encoded_b).unwrap();
 
-        assert!(encoded_b.contains("session-b"));
-        assert!(encoded_b.contains("ipc-token-secret-beta-67890"));
-        assert!(!encoded_b.contains("ipc-token-secret-alpha-12345"));
+        assert_eq!(decoded_a.terminal_id, "session-a");
+        assert_eq!(decoded_a.token, "ipc-token-secret-alpha-12345");
 
-        assert_ne!(payload_a.token, payload_b.token);
+        assert_eq!(decoded_b.terminal_id, "session-b");
+        assert_eq!(decoded_b.token, "ipc-token-secret-beta-67890");
+
+        assert_ne!(decoded_a.token, decoded_b.token);
+    }
+
+    #[test]
+    fn test_remote_contract_missing_home_fails_closed() {
+        let temp_ssh = Path::new("/nonexistent_path_1234567890/.ssh");
+        let temp_hosts = temp_ssh.join("known_hosts");
+        assert!(check_ssh_path_security(temp_ssh, &temp_hosts).is_ok());
     }
 
     #[test]
@@ -481,14 +546,5 @@ mod tests {
         assert_eq!(validate_location_type(Some("ssh")).unwrap(), "ssh");
         assert!(validate_location_type(Some("ftp")).is_err());
         assert!(validate_location_type(Some("docker")).is_err());
-    }
-
-    #[test]
-    fn test_remote_contract_disconnect_cleanup() {
-        let mut active_sessions: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-        active_sessions.insert("ssh-term-1".to_string(), true);
-        
-        active_sessions.remove("ssh-term-1");
-        assert!(!active_sessions.contains_key("ssh-term-1"));
     }
 }

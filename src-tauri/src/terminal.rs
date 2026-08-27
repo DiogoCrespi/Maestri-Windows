@@ -305,8 +305,10 @@ impl TerminalSession {
             worker.stop_and_join();
         }
 
-        if let Some(pid) = self.pid {
-            let _ = crate::remote_terminal_contract::kill_process_tree_windows(pid);
+        if self.is_remote {
+            if let Some(pid) = self.pid {
+                let _ = crate::remote_terminal_contract::kill_process_tree_windows(pid);
+            }
         }
 
         let mut killer = self
@@ -1044,21 +1046,34 @@ fn start_ssh_threads<R: Runtime>(
     let reader_app = app;
     let reader_registry = registry_weak;
 
+    let handshake_done = Arc::new(AtomicBool::new(false));
+    let watchdog_session = Arc::clone(&session);
+    let watchdog_done = Arc::clone(&handshake_done);
+    thread::Builder::new()
+        .name(format!("maestri-ssh-handshake-watchdog-{reader_id}"))
+        .spawn(move || {
+            let timeout = Duration::from_secs(10);
+            let start = Instant::now();
+            while start.elapsed() < timeout {
+                if watchdog_done.load(Ordering::Acquire) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            if !watchdog_done.load(Ordering::Acquire) {
+                let _ = watchdog_session.request_stop();
+            }
+        })
+        .ok();
+
     thread::Builder::new()
         .name(format!("maestri-ssh-terminal-reader-{reader_id}-{reader_token}"))
         .spawn(move || {
             let mut buffer = vec![0_u8; READ_BUFFER_BYTES];
             let mut hs_buffer = crate::remote_terminal_contract::HandshakeBuffer::new();
             let mut payload_sent = false;
-            let start_time = std::time::Instant::now();
-            let timeout_duration = std::time::Duration::from_secs(10);
 
             loop {
-                if !payload_sent && start_time.elapsed() > timeout_duration {
-                    let _ = reader_session.request_stop();
-                    break;
-                }
-
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(size) => {
@@ -1079,6 +1094,8 @@ fn start_ssh_threads<R: Runtime>(
                                     let _ = reader_session.write_input(&payload_str);
                                 }
                             }
+                        } else if let Some(crate::remote_terminal_contract::HandshakeEvent::Established) = event {
+                            handshake_done.store(true, Ordering::Release);
                         }
 
                         if clean_bytes.is_empty() {
@@ -1117,6 +1134,7 @@ fn start_ssh_threads<R: Runtime>(
                     Err(_) => break,
                 }
             }
+            handshake_done.store(true, Ordering::Release);
         })
         .map_err(|error| format!("cannot start SSH terminal reader: {error}"))?;
 
@@ -1136,11 +1154,7 @@ fn terminal_create_ssh_with_registry<R: Runtime>(
     validate_id(&id)?;
     validate_size(cols, rows)?;
 
-    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-        let ssh_dir = std::path::PathBuf::from(&home).join(".ssh");
-        let known_hosts = ssh_dir.join("known_hosts");
-        crate::remote_terminal_contract::check_ssh_path_security(&ssh_dir, &known_hosts)?;
-    }
+    crate::remote_terminal_contract::check_default_user_ssh_security()?;
 
     let active_config = ssh_manager
         .active_config()
