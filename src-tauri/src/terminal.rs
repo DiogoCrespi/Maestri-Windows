@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -1064,7 +1065,7 @@ fn start_ssh_threads<R: Runtime>(
                 let _ = watchdog_session.request_stop();
             }
         })
-        .ok();
+        .map_err(|error| format!("cannot start SSH handshake watchdog: {error}"))?;
 
     thread::Builder::new()
         .name(format!("maestri-ssh-terminal-reader-{reader_id}-{reader_token}"))

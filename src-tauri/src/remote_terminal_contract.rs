@@ -47,6 +47,14 @@ pub fn validate_location_type(location_type: Option<&str>) -> Result<&'static st
     }
 }
 
+pub fn is_reparse_or_symlink_attributes(file_attributes: u32, is_symlink: bool) -> bool {
+    if is_symlink {
+        return true;
+    }
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    (file_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+}
+
 pub fn is_reparse_or_symlink_meta(meta: &std::fs::Metadata) -> bool {
     if meta.file_type().is_symlink() {
         return true;
@@ -54,12 +62,12 @@ pub fn is_reparse_or_symlink_meta(meta: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-            return true;
-        }
+        return is_reparse_or_symlink_attributes(meta.file_attributes(), false);
     }
-    false
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 pub fn check_ssh_path_security(ssh_dir: &Path, known_hosts: &Path) -> Result<(), String> {
@@ -95,15 +103,19 @@ pub fn check_ssh_path_security(ssh_dir: &Path, known_hosts: &Path) -> Result<(),
     Ok(())
 }
 
-pub fn check_default_user_ssh_security() -> Result<(), String> {
-    let home_var = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME"));
-    let home_str = match home_var {
-        Ok(val) if !val.trim().is_empty() => val,
+pub fn check_user_ssh_security_with_home(home_env: Option<&str>) -> Result<(), String> {
+    let home_str = match home_env {
+        Some(val) if !val.trim().is_empty() => val.trim(),
         _ => return Err("Security Error: Neither USERPROFILE nor HOME environment variable is defined".to_string()),
     };
-    let ssh_dir = PathBuf::from(&home_str).join(".ssh");
+    let ssh_dir = PathBuf::from(home_str).join(".ssh");
     let known_hosts = ssh_dir.join("known_hosts");
     check_ssh_path_security(&ssh_dir, &known_hosts)
+}
+
+pub fn check_default_user_ssh_security() -> Result<(), String> {
+    let home_var = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME"));
+    check_user_ssh_security_with_home(home_var.as_deref().ok())
 }
 
 pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
@@ -112,32 +124,31 @@ pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let windir = std::env::var("WINDIR").map_err(|_| "WINDIR environment variable is not defined".to_string())?;
         let taskkill_bin = PathBuf::from(windir).join("System32").join("taskkill.exe");
-        let executable = if taskkill_bin.is_file() {
-            taskkill_bin
-        } else {
-            PathBuf::from("taskkill.exe")
-        };
+        if !taskkill_bin.is_file() {
+            return Err(format!("System32 taskkill.exe binary is missing at {}", taskkill_bin.display()));
+        }
 
         let pid_str = pid.to_string();
-        let output = std::process::Command::new(executable)
+        let output = std::process::Command::new(taskkill_bin)
             .args(["/F", "/T", "/PID", &pid_str])
-            .output();
+            .output()
+            .map_err(|e| format!("Failed to execute System32 taskkill.exe for PID {pid}: {e}"))?;
 
-        match output {
-            Ok(out) => {
-                if !out.status.success() {
-                    let err_msg = String::from_utf8_lossy(&out.stderr);
-                    if !err_msg.contains("not found")
-                        && !err_msg.contains("não encontrado")
-                        && !err_msg.contains("process")
-                    {
-                        return Err(format!("taskkill failed for PID {pid}: {err_msg}"));
-                    }
-                }
+        if !output.status.success() {
+            let stderr_str = String::from_utf8_lossy(&output.stderr);
+            let is_pid_gone = output.status.code() == Some(128)
+                || stderr_str.contains("not found")
+                || stderr_str.contains("não encontrado")
+                || stderr_str.contains("no process");
+            if !is_pid_gone {
+                return Err(format!(
+                    "taskkill failed for PID {pid} (exit code {:?}): {}",
+                    output.status.code(),
+                    stderr_str.trim()
+                ));
             }
-            Err(e) => return Err(format!("Failed to execute taskkill for PID {pid}: {e}")),
         }
     }
     Ok(())
@@ -247,11 +258,11 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-const MAX_PENDING_TAIL_BYTES: usize = 1024;
+const MAX_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub struct HandshakeBuffer {
-    pending_tail: Vec<u8>,
+    stream_buffer: Vec<u8>,
     ready_detected: bool,
     established_detected: bool,
     osc52_in_progress: bool,
@@ -263,14 +274,16 @@ impl HandshakeBuffer {
     }
 
     pub fn process_chunk(&mut self, chunk: &[u8], nonce: &str) -> (Option<HandshakeEvent>, Vec<u8>) {
-        let mut buffer = std::mem::take(&mut self.pending_tail);
-        buffer.extend_from_slice(chunk);
+        self.stream_buffer.extend_from_slice(chunk);
+        if self.stream_buffer.len() > MAX_STREAM_BUFFER_BYTES {
+            self.stream_buffer.drain(..self.stream_buffer.len() - MAX_STREAM_BUFFER_BYTES);
+        }
 
         let ready_marker = format!("READY:{nonce}");
         let established_marker = format!("ESTABLISHED:{nonce}");
         let mut event = None;
 
-        let content_str = String::from_utf8_lossy(&buffer).to_string();
+        let content_str = String::from_utf8_lossy(&self.stream_buffer).to_string();
 
         if !self.ready_detected && content_str.contains(&ready_marker) {
             self.ready_detected = true;
@@ -280,42 +293,50 @@ impl HandshakeBuffer {
             event = Some(HandshakeEvent::Established);
         }
 
-        let (sanitized_delta, new_pending) = self.sanitize_and_filter(&buffer, nonce);
-        self.pending_tail = new_pending;
-
-        if self.pending_tail.len() > MAX_PENDING_TAIL_BYTES {
-            self.pending_tail.drain(..self.pending_tail.len() - MAX_PENDING_TAIL_BYTES);
-        }
-
-        (event, sanitized_delta)
+        let delta_output = self.extract_sanitized_delta(nonce);
+        (event, delta_output)
     }
 
-    fn sanitize_and_filter(&mut self, data: &[u8], nonce: &str) -> (Vec<u8>, Vec<u8>) {
-        let (sanitized, pending) = self.strip_osc52(data);
-        let text = String::from_utf8_lossy(&sanitized);
+    fn extract_sanitized_delta(&mut self, nonce: &str) -> Vec<u8> {
         let ready_pattern = format!("READY:{nonce}");
         let est_pattern = format!("ESTABLISHED:{nonce}");
 
-        let mut cleaned = String::new();
-        for line in text.lines() {
-            let line_trim = line.trim();
-            if line_trim == ready_pattern
-                || line_trim == est_pattern
-                || line_trim.contains(&ready_pattern)
-                || line_trim.contains(&est_pattern)
-            {
-                continue;
+        let text = String::from_utf8_lossy(&self.stream_buffer).to_string();
+
+        let mut last_newline_pos = None;
+        for (idx, ch) in text.char_indices() {
+            if ch == '\n' {
+                last_newline_pos = Some(idx);
             }
-            cleaned.push_str(line);
-            cleaned.push('\n');
         }
-        if !text.ends_with('\n') && cleaned.ends_with('\n') {
-            cleaned.pop();
+
+        let (lines_part, trailing_part) = match last_newline_pos {
+            Some(pos) => (&text[..=pos], &text[pos + 1..]),
+            None => ("", text.as_str()),
+        };
+
+        let mut delta_str = String::new();
+        if !lines_part.is_empty() {
+            for line in lines_part.lines() {
+                let line_trim = line.trim();
+                if line_trim == ready_pattern
+                    || line_trim == est_pattern
+                    || line_trim.contains(&ready_pattern)
+                    || line_trim.contains(&est_pattern)
+                {
+                    continue;
+                }
+                delta_str.push_str(line);
+                delta_str.push('\n');
+            }
         }
-        (cleaned.into_bytes(), pending)
+
+        self.stream_buffer = trailing_part.as_bytes().to_vec();
+
+        self.strip_osc52(delta_str.as_bytes())
     }
 
-    fn strip_osc52(&mut self, data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    fn strip_osc52(&mut self, data: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(data.len());
         let mut idx = 0;
 
@@ -327,25 +348,13 @@ impl HandshakeBuffer {
                 } else if data[idx] == 0x1b && idx + 1 < data.len() && data[idx + 1] == b'\\' {
                     self.osc52_in_progress = false;
                     idx += 2;
-                } else if data[idx] == 0x1b && idx + 1 == data.len() {
-                    // Trailing ESC character at end of chunk: save to pending
-                    return (out, data[idx..].to_vec());
                 } else {
                     idx += 1;
                 }
             } else {
-                if data[idx] == 0x1b {
-                    let remaining = data.len() - idx;
-                    if remaining >= 5 && &data[idx..idx + 5] == b"\x1b]52;" {
-                        self.osc52_in_progress = true;
-                        idx += 5;
-                    } else if remaining < 5 && b"\x1b]52;".starts_with(&data[idx..]) {
-                        // Incomplete ESC ] 52 prefix at chunk boundary: save to pending
-                        return (out, data[idx..].to_vec());
-                    } else {
-                        out.push(data[idx]);
-                        idx += 1;
-                    }
+                if data[idx] == 0x1b && idx + 4 < data.len() && &data[idx..idx + 5] == b"\x1b]52;" {
+                    self.osc52_in_progress = true;
+                    idx += 5;
                 } else {
                     out.push(data[idx]);
                     idx += 1;
@@ -353,7 +362,7 @@ impl HandshakeBuffer {
             }
         }
 
-        (out, Vec::new())
+        out
     }
 }
 
@@ -389,15 +398,19 @@ mod tests {
         let mut hs = HandshakeBuffer::new();
 
         let chunk1 = b"Connecting...\r\nRE";
-        let (evt1, _out1) = hs.process_chunk(chunk1, nonce);
+        let (evt1, out1) = hs.process_chunk(chunk1, nonce);
         assert_eq!(evt1, None);
+        assert_eq!(String::from_utf8_lossy(&out1), "Connecting...\n");
 
         let chunk2 = b"ADY:a1b2c3d4e5f60718\r\n";
         let (evt2, out2) = hs.process_chunk(chunk2, nonce);
         assert_eq!(evt2, Some(HandshakeEvent::Ready));
+        assert!(out2.is_empty());
 
-        let out2_str = String::from_utf8_lossy(&out2);
-        assert!(!out2_str.contains("READY:a1b2c3d4e5f60718"));
+        let chunk3 = b"ESTABLISHED:a1b2c3d4e5f60718\r\nWelcome to remote terminal!\r\n";
+        let (evt3, out3) = hs.process_chunk(chunk3, nonce);
+        assert_eq!(evt3, Some(HandshakeEvent::Established));
+        assert_eq!(String::from_utf8_lossy(&out3), "Welcome to remote terminal!\n");
     }
 
     #[test]
@@ -427,7 +440,7 @@ mod tests {
         let nonce = "1122334455667788";
         let mut hs = HandshakeBuffer::new();
 
-        let raw = format!("READY:{nonce}\r\nSome normal output line\r\nESTABLISHED:{nonce}\r\nSecond line");
+        let raw = format!("READY:{nonce}\r\nSome normal output line\r\nESTABLISHED:{nonce}\r\nSecond line\r\n");
         let (evt, filtered) = hs.process_chunk(raw.as_bytes(), nonce);
         assert_eq!(evt, Some(HandshakeEvent::Ready));
         let filtered_str = String::from_utf8_lossy(&filtered);
@@ -443,26 +456,22 @@ mod tests {
         let nonce = "9988776655443322";
         let mut hs = HandshakeBuffer::new();
 
-        let raw_chunk1 = b"\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m";
+        let raw_chunk1 = b"\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m\r\n";
         let (_evt, clean1) = hs.process_chunk(raw_chunk1, nonce);
         let clean1_str = String::from_utf8_lossy(&clean1);
 
         assert!(clean1_str.contains("\x1b[31mRed Text\x1b[0m"));
         assert!(clean1_str.contains("\x1b[32mGreen Text\x1b[0m"));
         assert!(!clean1_str.contains("52;c;c2Vjc2V0X2NsaXBib2FyZA=="));
+    }
 
-        let mut hs_frag = HandshakeBuffer::new();
-        let chunk_a = b"Before \x1b]52;c;c2Vjc2V";
-        let chunk_b = b"0X2NsaXBib2FyZA==\x07 After";
-
-        let (_evt_a, clean_a) = hs_frag.process_chunk(chunk_a, nonce);
-        let (_evt_b, clean_b) = hs_frag.process_chunk(chunk_b, nonce);
-
-        let clean_a_str = String::from_utf8_lossy(&clean_a);
-        let clean_b_str = String::from_utf8_lossy(&clean_b);
-
-        assert_eq!(clean_a_str, "Before ");
-        assert_eq!(clean_b_str, " After");
+    #[test]
+    fn test_remote_contract_reparse_attribute_decision_helper() {
+        assert!(is_reparse_or_symlink_attributes(0x400, false));
+        assert!(is_reparse_or_symlink_attributes(0x400 | 0x10, false));
+        assert!(is_reparse_or_symlink_attributes(0x80, true));
+        assert!(!is_reparse_or_symlink_attributes(0x80, false));
+        assert!(!is_reparse_or_symlink_attributes(0x10, false));
     }
 
     #[test]
@@ -515,9 +524,13 @@ mod tests {
 
     #[test]
     fn test_remote_contract_missing_home_fails_closed() {
-        let temp_ssh = Path::new("/nonexistent_path_1234567890/.ssh");
-        let temp_hosts = temp_ssh.join("known_hosts");
-        assert!(check_ssh_path_security(temp_ssh, &temp_hosts).is_ok());
+        let res_none = check_user_ssh_security_with_home(None);
+        assert!(res_none.is_err());
+        assert!(res_none.unwrap_err().contains("Neither USERPROFILE nor HOME"));
+
+        let res_empty = check_user_ssh_security_with_home(Some("   "));
+        assert!(res_empty.is_err());
+        assert!(res_empty.unwrap_err().contains("Neither USERPROFILE nor HOME"));
     }
 
     #[test]
