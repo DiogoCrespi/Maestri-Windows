@@ -12,6 +12,7 @@ export interface CreateTerminalOptions {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  locationType?: string;
 }
 
 export interface TerminalOutputPayload {
@@ -66,6 +67,7 @@ export interface DesktopBridge {
     args?: string[],
     env?: Record<string, string>,
     command?: string,
+    locationType?: string,
   ) => Promise<void>;
   writePty?: (id: string, data: string) => Promise<void>;
   resizePty?: (id: string, cols: number, rows: number) => Promise<void>;
@@ -169,6 +171,7 @@ export const desktopBridge: DesktopBridge = {
     args?: string[],
     env?: Record<string, string>,
     command?: string,
+    locationType?: string,
   ) {
     if (isNative) {
       await ensureNativeListeners();
@@ -184,6 +187,7 @@ export const desktopBridge: DesktopBridge = {
         args,
         env,
         command,
+        locationType: locationType ?? "local",
       });
       activeSessionTokens.set(id, info.sessionToken);
     } else {
@@ -254,6 +258,7 @@ export const desktopBridge: DesktopBridge = {
       options?.args,
       options?.env,
       options?.command,
+      options?.locationType ?? "local",
     );
   },
 

@@ -43,6 +43,7 @@ describe("DesktopBridge Remote SSH contract", () => {
       if (command === "ssh_probe") return Promise.resolve("C:\\Windows\\System32\\OpenSSH\\ssh.exe");
       if (command === "ssh_connect" || command === "ssh_status") return Promise.resolve(connected);
       if (command === "ssh_disconnect") return Promise.resolve({ ...connected, state: "disconnected" });
+      if (command === "terminal_create") return Promise.resolve({ id: "term-1", sessionToken: 123 });
       return Promise.resolve(undefined);
     });
 
@@ -58,9 +59,57 @@ describe("DesktopBridge Remote SSH contract", () => {
     expect(mocks.invoke).toHaveBeenCalledWith("ssh_disconnect");
   });
 
-  it("propagates native SSH rejection instead of masking it", async () => {
+  it("sends locationType in camelCase to terminal_create defaulting to 'local' and supporting 'ssh'", async () => {
     const { desktopBridge } = await import("./desktopBridge");
-    mocks.invoke.mockRejectedValueOnce(new Error("REMOTE HOST IDENTIFICATION HAS CHANGED"));
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "terminal_create") return Promise.resolve({ id: "term-1", sessionToken: 123 });
+      return Promise.resolve(undefined);
+    });
+
+    // 1. Default local creation
+    await desktopBridge.createTerminal("term-local", { cols: 80, rows: 24 });
+    expect(mocks.invoke).toHaveBeenLastCalledWith("terminal_create", {
+      id: "term-local",
+      cols: 80,
+      rows: 24,
+      cwd: undefined,
+      shell: undefined,
+      args: undefined,
+      env: undefined,
+      command: undefined,
+      locationType: "local",
+    });
+
+    // 2. Explicit SSH creation
+    await desktopBridge.createTerminal("term-ssh", { cols: 80, rows: 24, locationType: "ssh" });
+    expect(mocks.invoke).toHaveBeenLastCalledWith("terminal_create", {
+      id: "term-ssh",
+      cols: 80,
+      rows: 24,
+      cwd: undefined,
+      shell: undefined,
+      args: undefined,
+      env: undefined,
+      command: undefined,
+      locationType: "ssh",
+    });
+  });
+
+  it("propagates native SSH rejection instead of masking it or falling back silently", async () => {
+    const { desktopBridge } = await import("./desktopBridge");
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "ssh_connect") {
+        return Promise.reject(new Error("REMOTE HOST IDENTIFICATION HAS CHANGED"));
+      }
+      if (command === "terminal_create") {
+        return Promise.reject(new Error("Túnel SSH não conectado"));
+      }
+      return Promise.resolve(undefined);
+    });
+
     await expect(desktopBridge.sshConnect(config)).rejects.toThrow("HOST IDENTIFICATION");
+    await expect(
+      desktopBridge.createTerminal("term-fail", { locationType: "ssh" }),
+    ).rejects.toThrow("Túnel SSH não conectado");
   });
 });

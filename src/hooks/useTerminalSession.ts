@@ -39,6 +39,7 @@ export function useTerminalSession(
     command,
     args,
     env,
+    locationType,
     scrollbackFile,
     scrollbackLineCount,
     onOutput,
@@ -62,8 +63,8 @@ export function useTerminalSession(
   const onScrollbackMetadataRef = useRef(onScrollbackMetadata);
   onScrollbackMetadataRef.current = onScrollbackMetadata;
 
-  const optionsRef = useRef({ cols, rows, cwd, shellPath, command, args, env });
-  optionsRef.current = { cols, rows, cwd, shellPath, command, args, env };
+  const optionsRef = useRef({ cols, rows, cwd, shellPath, command, args, env, locationType });
+  optionsRef.current = { cols, rows, cwd, shellPath, command, args, env, locationType };
 
   const scrollbackRef = useRef({ scrollbackFile, scrollbackLineCount });
   scrollbackRef.current = { scrollbackFile, scrollbackLineCount };

@@ -8,10 +8,13 @@ import { loadScrollback, recordWebScrollback } from "../lib/scrollbackBridge";
 import { TerminalContent } from "../model/workspace";
 import { applyScrollbackMetadata } from "./terminalContract";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { LocationBadge } from "./LocationBadge";
+import { useWorkspaceStore } from "../store/workspaceStore";
 
 export interface TerminalNodeData {
   content: TerminalContent;
   jumpNumber?: number;
+  locationType?: string;
   onClose?: () => void;
   onChangeContent?: (content: TerminalContent) => void;
   [key: string]: unknown;
@@ -22,6 +25,11 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const content = nodeData?.content;
   const jumpNumber = nodeData?.jumpNumber;
   const ptyId = content?.id || id;
+
+  const currentWorkspaceLocationType = useWorkspaceStore(
+    (state) => state.currentDocument?.payload.locationType,
+  );
+  const locationType = nodeData?.locationType ?? currentWorkspaceLocationType ?? "local";
 
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -152,6 +160,7 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           configuredArgs,
           configuredEnv,
           initialCommand,
+          locationType,
         );
         if (!disposed) {
           ready = true;
@@ -304,6 +313,7 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           <span style={{ fontWeight: 600, fontSize: "13px", color: "#f4f4f5" }}>
             {content?.name || "Terminal"}
           </span>
+          <LocationBadge locationType={locationType} />
           {content?.agentType && (
             <span
               style={{
