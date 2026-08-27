@@ -13,6 +13,8 @@ mod routine_runtime;
 mod routines;
 mod scrollback;
 mod shells;
+mod ssh;
+mod ssh_contract;
 mod terminal;
 mod workspace;
 
@@ -854,6 +856,7 @@ pub fn run() {
             app.manage(terminal.clone());
             app.manage(portal);
             app.manage(access_graph);
+            app.manage(ssh::SshManager::default());
             app.manage(routine_runtime.clone());
             app.manage(AppState {
                 terminal,
@@ -902,7 +905,12 @@ pub fn run() {
             floors::floor_remove,
             floors::floor_run_hooks,
             floors::floor_preview_land,
-            floors::floor_land
+            floors::floor_land,
+            ssh::ssh_probe,
+            ssh::ssh_install,
+            ssh::ssh_connect,
+            ssh::ssh_disconnect,
+            ssh::ssh_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building open-maestri Tauri application")
@@ -911,6 +919,7 @@ pub fn run() {
                 app_handle
                     .state::<Arc<routine_runtime::RoutineRuntime>>()
                     .shutdown();
+                let _ = app_handle.state::<ssh::SshManager>().disconnect();
                 app_handle.state::<AppState>().shutdown(app_handle);
             }
         });

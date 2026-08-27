@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BUILTIN_PRESETS, BUILTIN_ROLES, PREFERENCES_LIMITS, validatePreset, validateRole } from "./preferences";
+import {
+  BUILTIN_PRESETS,
+  BUILTIN_ROLES,
+  CURRENT_PREFERENCES_VERSION,
+  DEFAULT_SSH_PREFERENCES,
+  PREFERENCES_LIMITS,
+  validatePreset,
+  validateRole,
+  validateSshPreferences,
+} from "./preferences";
 import { createPreferencesStore, loadPreferencesFromStorage, migratePreferences } from "./preferencesStore";
 
 class MemoryStorage implements Storage {
@@ -160,9 +169,32 @@ describe("PreferencesStore CRUD & Persistence", () => {
     };
 
     const migrated = migratePreferences(legacyData);
-    expect(migrated.version).toBe(1);
+    expect(migrated.version).toBe(CURRENT_PREFERENCES_VERSION);
     expect(migrated.presets.some((p) => p.id === "custom-old")).toBe(true);
     expect(migrated.presets.some((p) => p.id === "preset-claude-code")).toBe(true);
+    expect(migrated.ssh).toEqual(DEFAULT_SSH_PREFERENCES);
+  });
+
+  it("migrates, validates, updates and persists Remote SSH preferences", () => {
+    const store = createPreferencesStore(undefined, memoryStorage);
+    store.updateSsh({
+      enabled: true,
+      host: "build.example.test",
+      user: "developer",
+      tunnelPort: 17433,
+    });
+
+    expect(store.getState().ssh).toMatchObject({
+      enabled: true,
+      host: "build.example.test",
+      user: "developer",
+      port: 22,
+      tunnelPort: 17433,
+      scriptPath: "~/.local/bin/omaestri",
+    });
+    expect(loadPreferencesFromStorage(memoryStorage).ssh).toEqual(store.getState().ssh);
+    expect(() => store.updateSsh({ port: 0 })).toThrow("between 1 and 65535");
+    expect(validateSshPreferences({ ...DEFAULT_SSH_PREFERENCES, tunnelPort: 65536 }).valid).toBe(false);
   });
 
   it("rejects invalid imported items without replacing the current state", () => {

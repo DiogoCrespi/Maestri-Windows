@@ -233,3 +233,28 @@
   height: 160px;
   font-family: monospace;
 }
+
+.preferences-help,
+.preferences-ssh-state {
+  color: #a1a1aa;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.preferences-checkbox {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.preferences-inline-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preferences-inline-fields label {
+  display: grid;
+  gap: 6px;
+}

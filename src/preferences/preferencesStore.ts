@@ -3,13 +3,16 @@ import {
   BUILTIN_PRESETS,
   BUILTIN_ROLES,
   CURRENT_PREFERENCES_VERSION,
+  DEFAULT_SSH_PREFERENCES,
   PREFERENCES_LIMITS,
   PreferencesState,
   TerminalPreset,
+  SshPreferences,
   validateImportedPreset,
   validateImportedRole,
   validatePreset,
   validateRole,
+  validateSshPreferences,
 } from "./preferences";
 
 const STORAGE_KEY = "maestri-preferences:v1";
@@ -19,6 +22,7 @@ function defaultPreferences(): PreferencesState {
     version: CURRENT_PREFERENCES_VERSION,
     presets: [...BUILTIN_PRESETS],
     roles: [...BUILTIN_ROLES],
+    ssh: { ...DEFAULT_SSH_PREFERENCES },
   };
 }
 
@@ -122,10 +126,29 @@ export function migratePreferences(data: unknown): PreferencesState {
     if (!roleIds.has(builtin.id)) roles.unshift(builtin);
   }
 
-  return { version: CURRENT_PREFERENCES_VERSION, presets, roles };
+  const rawSsh = record.ssh;
+  if (rawSsh !== undefined && (!rawSsh || typeof rawSsh !== "object" || Array.isArray(rawSsh))) {
+    throw new Error("ssh must be an object");
+  }
+  const ssh: SshPreferences = rawSsh === undefined
+    ? { ...DEFAULT_SSH_PREFERENCES }
+    : {
+        enabled: (rawSsh as Record<string, unknown>).enabled as boolean,
+        host: (rawSsh as Record<string, unknown>).host as string,
+        user: (rawSsh as Record<string, unknown>).user as string,
+        port: (rawSsh as Record<string, unknown>).port as number,
+        tunnelPort: (rawSsh as Record<string, unknown>).tunnelPort as number,
+        scriptPath: (rawSsh as Record<string, unknown>).scriptPath as string,
+        addToPath: (rawSsh as Record<string, unknown>).addToPath as boolean,
+      };
+  const sshValidation = validateSshPreferences(ssh);
+  if (!sshValidation.valid) throw new Error(sshValidation.errors.join("; "));
+
+  return { version: CURRENT_PREFERENCES_VERSION, presets, roles, ssh };
 }
 
 export interface PreferencesStoreActions {
+  updateSsh: (updates: Partial<SshPreferences>) => void;
   addPreset: (preset: Omit<TerminalPreset, "id" | "isBuiltIn" | "createdAt" | "updatedAt">) => TerminalPreset;
   updatePreset: (id: string, updates: Partial<Omit<TerminalPreset, "id" | "isBuiltIn">>) => boolean;
   deletePreset: (id: string) => boolean;
@@ -166,6 +189,14 @@ export function createPreferencesStore(
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+
+    updateSsh: (updates: Partial<SshPreferences>): void => {
+      const next = { ...state.ssh, ...updates };
+      const validation = validateSshPreferences(next);
+      if (!validation.valid) throw new Error(`Invalid SSH preferences: ${validation.errors.join(", ")}`);
+      state = { ...state, ssh: next };
+      notify();
     },
 
     addPreset: (input: Omit<TerminalPreset, "id" | "isBuiltIn" | "createdAt" | "updatedAt">): TerminalPreset => {

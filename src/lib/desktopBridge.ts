@@ -38,6 +38,23 @@ export interface PortalInfo {
   storageScope?: string;
 }
 
+export interface SshConfig {
+  host: string;
+  user: string;
+  port: number;
+  scriptPath: string;
+  tunnelPort: number;
+  addToPath: boolean;
+}
+
+export interface SshStatus {
+  state: "connected" | "disconnected";
+  host: string | null;
+  port: number | null;
+  tunnelPort: number | null;
+  message: string | null;
+}
+
 export interface DesktopBridge {
   isNative: boolean;
   createPty?: (
@@ -76,6 +93,11 @@ export interface DesktopBridge {
   portalGoBack: (id: string) => Promise<PortalInfo>;
   portalGoForward: (id: string) => Promise<PortalInfo>;
   portalInspect: (id: string) => Promise<PortalInfo>;
+  sshProbe: () => Promise<string>;
+  sshInstall: (config: SshConfig) => Promise<void>;
+  sshConnect: (config: SshConfig) => Promise<SshStatus>;
+  sshDisconnect: () => Promise<SshStatus>;
+  sshStatus: () => Promise<SshStatus>;
   chooseWorkspaceToOpen: () => Promise<string | null>;
   chooseWorkspaceToSave: (defaultPath: string) => Promise<string | null>;
   chooseProjectDirectory: () => Promise<string | null>;
@@ -322,6 +344,39 @@ export const desktopBridge: DesktopBridge = {
   async portalInspect(id) {
     if (!isNative) return { id, name: "Portal", currentUrl: "about:blank", title: null, isLoading: false };
     return invoke<PortalInfo>("portal_inspect", { id });
+  },
+
+  async sshProbe() {
+    if (!isNative) return "Preview web (Windows OpenSSH não verificado)";
+    return invoke<string>("ssh_probe");
+  },
+
+  async sshInstall(config) {
+    if (!isNative) throw new Error("A instalação SSH requer o aplicativo Windows nativo.");
+    await invoke("ssh_install", { config });
+  },
+
+  async sshConnect(config) {
+    if (!isNative) {
+      return {
+        state: "disconnected",
+        host: config.host,
+        port: config.port,
+        tunnelPort: config.tunnelPort,
+        message: "O túnel SSH requer o aplicativo Windows nativo.",
+      };
+    }
+    return invoke<SshStatus>("ssh_connect", { config });
+  },
+
+  async sshDisconnect() {
+    if (!isNative) return { state: "disconnected", host: null, port: null, tunnelPort: null, message: null };
+    return invoke<SshStatus>("ssh_disconnect");
+  },
+
+  async sshStatus() {
+    if (!isNative) return { state: "disconnected", host: null, port: null, tunnelPort: null, message: null };
+    return invoke<SshStatus>("ssh_status");
   },
 
   async chooseWorkspaceToOpen() {

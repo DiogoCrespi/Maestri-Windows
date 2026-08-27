@@ -28,13 +28,34 @@ export interface AgentRole {
   updatedAt: string;
 }
 
+export interface SshPreferences {
+  enabled: boolean;
+  host: string;
+  user: string;
+  port: number;
+  tunnelPort: number;
+  scriptPath: string;
+  addToPath: boolean;
+}
+
+export const DEFAULT_SSH_PREFERENCES: SshPreferences = {
+  enabled: false,
+  host: "",
+  user: "",
+  port: 22,
+  tunnelPort: 7433,
+  scriptPath: "~/.local/bin/omaestri",
+  addToPath: true,
+};
+
 export interface PreferencesState {
   version: number;
   presets: TerminalPreset[];
   roles: AgentRole[];
+  ssh: SshPreferences;
 }
 
-export const CURRENT_PREFERENCES_VERSION = 1;
+export const CURRENT_PREFERENCES_VERSION = 2;
 
 export const PREFERENCES_LIMITS = {
   maxPresets: 100,
@@ -57,7 +78,37 @@ export const PREFERENCES_LIMITS = {
   allowedActions: 64,
   allowedAction: 128,
   timestamp: 64,
+  sshHost: 253,
+  sshUser: 64,
+  sshScriptPath: 4096,
 } as const;
+
+export function validateSshPreferences(value: SshPreferences): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (typeof value.enabled !== "boolean") errors.push("SSH enabled must be a boolean");
+  errors.push(...validateText(value.host, "SSH host", PREFERENCES_LIMITS.sshHost, value.enabled));
+  errors.push(...validateText(value.user, "SSH user", PREFERENCES_LIMITS.sshUser, value.enabled));
+  errors.push(...validateText(value.scriptPath, "SSH scriptPath", PREFERENCES_LIMITS.sshScriptPath, true));
+  if (value.host && (value.host.startsWith("-") || value.host.includes("@") || /\s/.test(value.host)
+    || !/^[A-Za-z0-9.:[\]%-]+$/.test(value.host))) {
+    errors.push("SSH host contains unsupported characters");
+  }
+  if (value.user && (value.user.startsWith("-") || !/^[A-Za-z0-9_.-]+$/.test(value.user))) {
+    errors.push("SSH user contains unsupported characters");
+  }
+  if (!(value.scriptPath.startsWith("~/") || value.scriptPath.startsWith("/"))
+    || /[;|&`$<>'"\u0000-\u001f]/.test(value.scriptPath)) {
+    errors.push("SSH scriptPath must be an absolute POSIX path without shell metacharacters");
+  }
+  if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) {
+    errors.push("SSH port must be an integer between 1 and 65535");
+  }
+  if (!Number.isInteger(value.tunnelPort) || value.tunnelPort < 1 || value.tunnelPort > 65535) {
+    errors.push("SSH tunnelPort must be an integer between 1 and 65535");
+  }
+  if (typeof value.addToPath !== "boolean") errors.push("SSH addToPath must be a boolean");
+  return { valid: errors.length === 0, errors };
+}
 
 export const BUILTIN_PRESETS: TerminalPreset[] = [
   {

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AgentRole, AgentType, TerminalPreset } from "../preferences/preferences";
+import { AgentRole, AgentType, SshPreferences, TerminalPreset } from "../preferences/preferences";
 import { createPreferencesStore } from "../preferences/preferencesStore";
+import { desktopBridge, type SshConfig, type SshStatus } from "../lib/desktopBridge";
 import "./PreferencesPanel.css";
 
 export interface PreferencesPanelProps {
@@ -15,7 +16,7 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
   store: customStore,
 }) => {
   const [activeStore] = useState(() => customStore ?? createPreferencesStore());
-  const [tab, setTab] = useState<"presets" | "roles" | "io">("presets");
+  const [tab, setTab] = useState<"presets" | "roles" | "ssh" | "io">("presets");
   const [, setRefresh] = useState(0);
 
   // Form states for creating custom Preset
@@ -30,6 +31,10 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
   const [newRolePrompt, setNewRolePrompt] = useState("");
   const [newRolePresetId, setNewRolePresetId] = useState("");
 
+  const [sshDraft, setSshDraft] = useState<SshPreferences>(() => ({ ...activeStore.getState().ssh }));
+  const [sshStatus, setSshStatus] = useState<SshStatus | null>(null);
+  const [sshBusy, setSshBusy] = useState(false);
+
   // Import/Export state
   const [jsonText, setJsonText] = useState("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -41,7 +46,8 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
   // Track dirty state of forms
   const isPresetFormDirty = Boolean(newPresetName.trim() || newPresetCommand.trim());
   const isRoleFormDirty = Boolean(newRoleName.trim() || newRolePrompt.trim());
-  const isAnyFormDirty = isPresetFormDirty || isRoleFormDirty;
+  const isSshFormDirty = JSON.stringify(sshDraft) !== JSON.stringify(activeStore.getState().ssh);
+  const isAnyFormDirty = isPresetFormDirty || isRoleFormDirty || isSshFormDirty;
 
   const handleClose = () => {
     if (isAnyFormDirty) {
@@ -68,6 +74,25 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
       previousActiveElement.current.focus();
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    setSshDraft({ ...activeStore.getState().ssh });
+    const refreshStatus = () => {
+      desktopBridge.sshStatus().then((status) => {
+        if (active) setSshStatus(status);
+      }).catch((error) => {
+        if (active) setErrorMessage(`Não foi possível consultar o túnel SSH: ${String(error)}`);
+      });
+    };
+    refreshStatus();
+    const interval = window.setInterval(refreshStatus, 2_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [activeStore, isOpen]);
 
   // Keyboard navigation: Escape key closes modal
   useEffect(() => {
@@ -182,6 +207,54 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     }
   };
 
+  const sshConfig = (): SshConfig => ({
+    host: sshDraft.host.trim(),
+    user: sshDraft.user.trim(),
+    port: sshDraft.port,
+    tunnelPort: sshDraft.tunnelPort,
+    scriptPath: sshDraft.scriptPath.trim(),
+    addToPath: sshDraft.addToPath,
+  });
+
+  const saveSshPreferences = () => {
+    activeStore.updateSsh({ ...sshDraft, host: sshDraft.host.trim(), user: sshDraft.user.trim(), scriptPath: sshDraft.scriptPath.trim() });
+    setSshDraft({ ...activeStore.getState().ssh });
+    setRefresh((value) => value + 1);
+  };
+
+  const runSshAction = async (action: "save" | "install" | "connect" | "disconnect") => {
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setSshBusy(true);
+    try {
+      if (action === "disconnect") {
+        const status = await desktopBridge.sshDisconnect();
+        setSshStatus(status);
+        setStatusMessage("Túnel SSH desconectado.");
+        return;
+      }
+      saveSshPreferences();
+      if (action === "save") {
+        setStatusMessage("Configuração SSH salva.");
+        return;
+      }
+      await desktopBridge.sshProbe();
+      await desktopBridge.sshInstall(sshConfig());
+      if (action === "install") {
+        setStatusMessage(`Script remoto instalado em ${sshDraft.scriptPath}.`);
+        return;
+      }
+      const status = await desktopBridge.sshConnect(sshConfig());
+      setSshStatus(status);
+      if (status.state !== "connected") throw new Error(status.message ?? "o túnel não foi estabelecido");
+      setStatusMessage(`Túnel SSH conectado a ${sshDraft.user}@${sshDraft.host}.`);
+    } catch (error) {
+      setErrorMessage(`Falha SSH: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSshBusy(false);
+    }
+  };
+
   return (
     <div className="preferences-panel-overlay" onClick={handleClose}>
       <div
@@ -193,7 +266,7 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="preferences-panel-header">
-          <h2 id="pref-dialog-title">Presets &amp; Roles do Terminal</h2>
+          <h2 id="pref-dialog-title">Preferências do Maestri</h2>
           <button
             type="button"
             className="preferences-close-btn"
@@ -246,6 +319,17 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
             onClick={() => setTab("roles")}
           >
             Agent Roles ({state.roles.length})
+          </button>
+          <button
+            id="tab-ssh"
+            type="button"
+            role="tab"
+            aria-selected={tab === "ssh"}
+            aria-controls="panel-ssh"
+            className={`preferences-tab-btn ${tab === "ssh" ? "active" : ""}`}
+            onClick={() => setTab("ssh")}
+          >
+            Remote SSH
           </button>
           <button
             id="tab-io"
@@ -433,12 +517,81 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
             </div>
           )}
 
+          {tab === "ssh" && (
+            <div id="panel-ssh" role="tabpanel" aria-labelledby="tab-ssh">
+              <form className="preferences-form" onSubmit={(event) => { event.preventDefault(); void runSshAction("save"); }}>
+                <h3>Remote SSH</h3>
+                <p className="preferences-help">
+                  Instala um wrapper no host remoto e abre um túnel reverso limitado ao loopback remoto.
+                  A primeira conexão aceita uma chave nova; alterações posteriores da chave são recusadas pelo OpenSSH.
+                </p>
+                <label className="preferences-checkbox" htmlFor="pref-ssh-enabled">
+                  <input
+                    id="pref-ssh-enabled"
+                    type="checkbox"
+                    checked={sshDraft.enabled}
+                    disabled={sshBusy}
+                    onChange={(event) => setSshDraft((value) => ({ ...value, enabled: event.target.checked }))}
+                  />
+                  Habilitar Remote SSH
+                </label>
+                <div className="preferences-field">
+                  <label htmlFor="pref-ssh-host">Host</label>
+                  <input id="pref-ssh-host" value={sshDraft.host} disabled={sshBusy} required
+                    placeholder="server.example.com"
+                    onChange={(event) => setSshDraft((value) => ({ ...value, host: event.target.value }))} />
+                </div>
+                <div className="preferences-field">
+                  <label htmlFor="pref-ssh-user">Usuário</label>
+                  <input id="pref-ssh-user" value={sshDraft.user} disabled={sshBusy} required
+                    placeholder="developer"
+                    onChange={(event) => setSshDraft((value) => ({ ...value, user: event.target.value }))} />
+                </div>
+                <div className="preferences-field preferences-inline-fields">
+                  <label htmlFor="pref-ssh-port">Porta SSH
+                    <input id="pref-ssh-port" type="number" min={1} max={65535} value={sshDraft.port} disabled={sshBusy}
+                      onChange={(event) => setSshDraft((value) => ({ ...value, port: Number(event.target.value) }))} />
+                  </label>
+                  <label htmlFor="pref-ssh-tunnel-port">Porta remota do túnel
+                    <input id="pref-ssh-tunnel-port" type="number" min={1} max={65535} value={sshDraft.tunnelPort} disabled={sshBusy}
+                      onChange={(event) => setSshDraft((value) => ({ ...value, tunnelPort: Number(event.target.value) }))} />
+                  </label>
+                </div>
+                <div className="preferences-field">
+                  <label htmlFor="pref-ssh-script-path">Caminho remoto do script</label>
+                  <input id="pref-ssh-script-path" value={sshDraft.scriptPath} disabled={sshBusy} required
+                    onChange={(event) => setSshDraft((value) => ({ ...value, scriptPath: event.target.value }))} />
+                </div>
+                <label className="preferences-checkbox" htmlFor="pref-ssh-path">
+                  <input id="pref-ssh-path" type="checkbox" checked={sshDraft.addToPath} disabled={sshBusy}
+                    onChange={(event) => setSshDraft((value) => ({ ...value, addToPath: event.target.checked }))} />
+                  Adicionar o diretório à variável PATH via ~/.profile (idempotente)
+                </label>
+                <div className="preferences-ssh-state" role="status" aria-live="polite">
+                  Estado: {sshStatus?.state === "connected" ? `conectado (${sshStatus.host}:${sshStatus.port})` : "desconectado"}
+                  {sshStatus?.message ? ` — ${sshStatus.message}` : ""}
+                </div>
+                <div className="preferences-actions">
+                  <button type="submit" className="preferences-btn" disabled={sshBusy}>Salvar</button>
+                  <button type="button" className="preferences-btn" disabled={sshBusy || !sshDraft.host.trim() || !sshDraft.user.trim()}
+                    onClick={() => void runSshAction("install")}>Instalar script</button>
+                  <button type="button" className="preferences-btn preferences-btn-primary"
+                    disabled={sshBusy || !sshDraft.enabled || !sshDraft.host.trim() || !sshDraft.user.trim() || sshStatus?.state === "connected"}
+                    onClick={() => void runSshAction("connect")}>Instalar e conectar</button>
+                  <button type="button" className="preferences-btn preferences-btn-danger"
+                    disabled={sshBusy || sshStatus?.state !== "connected"}
+                    onClick={() => void runSshAction("disconnect")}>Desconectar</button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {tab === "io" && (
             <div id="panel-io" role="tabpanel" aria-labelledby="tab-io">
               <h3>Importar e Exportar Configurações JSON</h3>
               <p style={{ fontSize: "12px", color: "#a1a1aa" }}>
-                Você pode copiar a configuração atual ou colar um backup JSON para restaurar presets
-                e roles.
+                Você pode copiar a configuração atual ou colar um backup JSON para restaurar presets,
+                roles e Remote SSH.
               </p>
 
               <div className="preferences-actions" style={{ marginBottom: "12px" }}>
