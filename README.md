@@ -34,7 +34,11 @@ implemented:
 - Floors backed by safely confined Git worktrees, including setup/run/teardown
   hooks and guarded landing.
 - Remote SSH preferences, secure wrapper installation, reverse loopback tunnel,
-  real connection-state tracking, and controlled shutdown.
+  interactive remote terminal sessions through System32 OpenSSH, real
+  connection-state tracking, and controlled shutdown.
+- Remote-terminal hardening with a zero-secret stdin handshake, fail-closed
+  `known_hosts` reparse-point checks, process-tree cleanup, and streaming OSC 52
+  filtering that preserves normal ANSI/TUI output.
 - Unsigned MSI and NSIS release packaging with the companion CLI included.
 
 The remaining release work is primarily full native regression testing on a
@@ -129,6 +133,7 @@ Dedicated native gates:
 .\scripts\Invoke-NativeBackendHarness.ps1
 .\scripts\Invoke-FloorBackendHarness.ps1
 .\scripts\Invoke-SshBackendHarness.ps1
+.\scripts\Invoke-RemoteTerminalHarness.ps1
 .\scripts\Invoke-MaestroRoutineConptySmoke.ps1 -SelfTest
 ```
 
