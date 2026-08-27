@@ -1,38 +1,75 @@
-# open-maestri Windows
+# Open Maestri for Windows
 
-Native Windows scaffold for the GPL-3.0-only open-maestri desktop application.
-The existing frontend and `package.json` are intentionally left untouched.
+Open Maestri is a local-first Windows workspace for coordinating AI agents,
+interactive shells, notes, files, web portals, routines, Git worktrees, and
+remote SSH sessions on a spatial canvas.
 
-## Scope
+This Windows implementation uses Tauri 2, React, TypeScript, Rust, WebView2,
+and ConPTY. It is GPL-3.0-only and does not require login, mandatory telemetry,
+or a hosted Maestri service.
 
-This directory uses Tauri 2 for the desktop shell and Rust for native process
-and IPC integration. The current native scaffold provides:
+## Project status
 
-- A Windows Tauri application entry point and MSI/NSIS bundling configuration.
-- A managed PTY registry backed by `portable-pty` and the existing
-  `src-tauri/src/terminal.rs` module.
-- Tauri commands: `terminal_create`, `terminal_write`, `terminal_resize`,
-  `terminal_stop`, and `terminal_list`.
-- A loopback HTTP IPC server and `src-cli` companion for the initial
-  `omaestri list`, `check`, and `ask` flow.
-- Events: `app://ready`, `terminal://output`, and `terminal://exited`.
-- Shutdown cleanup through the terminal registry lifecycle and Tauri process exit.
+The main product workflow and the advanced Windows parity features are
+implemented:
 
-The PTY implementation lives in `src-tauri/src/terminal.rs`, bounded HTTP in
-`ipc.rs`, and composition/lifecycle in `lib.rs`.
+- Persistent spatial canvas with pan, zoom, selection, drag, resize, snapping,
+  duplication, minimap, edges, and editable text, shape, and freehand content.
+- Real PowerShell, Windows PowerShell, `cmd.exe`, WSL, and custom shell sessions
+  through ConPTY, including input, incremental output, resize, lifecycle,
+  persisted scrollback, command, arguments, environment, and working directory.
+- macOS-compatible `workspace.json` schema v2 with atomic saves, autosave,
+  last-workspace restoration, unknown-field preservation, and deterministic
+  legacy-ID migration.
+- Markdown notes backed by files, a local file tree with list/grid modes, file
+  preview/editing, and drag-to-terminal paths.
+- Native WebView2 portal nodes with navigation, isolated sessions, DOM
+  inspection, click, fill, JavaScript evaluation, and PNG screenshots.
+- Graph-authorized `omaestri.exe` communication between connected terminals,
+  notes, and portals.
+- Maestro Mode with recruit, connect, dismiss, role assignment, presets, and
+  correlated acknowledgements.
+- Workspace-scoped routines with once/every/daily/weekly schedules, IANA
+  timezones, limits, pre-run scripts, manual execution, and persisted state.
+- Floors backed by safely confined Git worktrees, including setup/run/teardown
+  hooks and guarded landing.
+- Remote SSH preferences, secure wrapper installation, reverse loopback tunnel,
+  real connection-state tracking, and controlled shutdown.
+- Unsigned MSI and NSIS release packaging with the companion CLI included.
 
-## Prerequisites
+The remaining release work is primarily full native regression testing on a
+clean Windows machine, installer signing/SmartScreen reputation, and enabling
+shared Portal sessions derived from Portal-to-Portal connections. Portal
+sessions are currently isolated by default.
 
-Install the following on Windows:
+## Architecture
 
-1. Node.js LTS and npm.
-2. Rust stable through rustup, including Cargo.
-3. Visual Studio 2022 Build Tools with **Desktop development with C++**,
-   MSVC, and a Windows 10/11 SDK.
-4. Microsoft Edge WebView2 Runtime.
-5. Tauri CLI, supplied by the existing frontend dev dependency.
+| Layer | Technology | Responsibility |
+| --- | --- | --- |
+| Desktop | Tauri 2 | Native window, IPC, lifecycle, dialogs, and packaging |
+| Frontend | React + TypeScript | Canvas, nodes, project manager, preferences, and workflows |
+| Canvas | `@xyflow/react` | Infinite viewport, nodes, handles, and connections |
+| Terminal | `@xterm/xterm` | VT/ANSI terminal rendering and input |
+| Native backend | Rust | ConPTY, persistence, access graph, routines, portals, Floors, and SSH |
+| Agent CLI | Rust | `omaestri.exe` commands over authenticated loopback HTTP |
 
-Example checks:
+The frontend talks to native services through a `DesktopBridge`, keeping the
+canvas testable in a browser preview. Native IPC listens only on loopback. Each
+ConPTY session receives its own CNG-generated credential, and every CLI request
+is checked against both the terminal identity and the current canvas access
+graph.
+
+## Requirements
+
+- Windows 10 version 1903 or later, or Windows 11.
+- Node.js and npm.
+- Rust 1.88 or later through rustup, including Cargo.
+- Visual Studio 2022 Build Tools with **Desktop development with C++**, MSVC,
+  and a Windows 10/11 SDK.
+- Microsoft Edge WebView2 Runtime.
+- Windows OpenSSH Client for Remote SSH features.
+
+Check the local toolchain:
 
 ```powershell
 node --version
@@ -43,156 +80,154 @@ npm exec tauri -- --version
 where.exe cl
 where.exe link
 where.exe rc
+where.exe ssh
 ```
 
-If the Tauri CLI is not available from `node_modules`, install dependencies
-from this directory first:
+## Development
+
+From the repository root:
 
 ```powershell
 npm install
-```
-
-## Development and verification
-
-Run these commands from `Maestri-Windows`:
-
-```powershell
-npm run typecheck
-npm run build
-npm test
-cargo check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 npm run tauri dev
 ```
 
-The release build produces unsigned MSI and NSIS artifacts. The supported
-wrapper builds `omaestri.exe`, stages it before bundling, and verifies both
-installer targets:
+Run the web preview without native services:
+
+```powershell
+npm run dev
+```
+
+The browser preview provides deterministic fallbacks for UI development. Real
+ConPTY, WebView2, filesystem, Floors, routines, and SSH behavior requires the
+Tauri application.
+
+## Verification
+
+Frontend checks:
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+Rust checks:
+
+```powershell
+cargo fmt --manifest-path src-tauri\Cargo.toml --check
+cargo check --manifest-path src-tauri\Cargo.toml
+cargo test --manifest-path src-tauri\Cargo.toml
+cargo test --manifest-path src-cli\Cargo.toml
+```
+
+Dedicated native gates:
+
+```powershell
+.\scripts\Invoke-NativeBackendHarness.ps1
+.\scripts\Invoke-FloorBackendHarness.ps1
+.\scripts\Invoke-SshBackendHarness.ps1
+.\scripts\Invoke-MaestroRoutineConptySmoke.ps1 -SelfTest
+```
+
+The native gate scripts fail when Windows or Rust prerequisites are missing.
+Skipping requires an explicit `-AllowSkip` where supported, so CI cannot report
+a false green accidentally.
+
+## Workspace format and local state
+
+Open Maestri reads and writes schema-v2 `workspace.json` files compatible with
+the macOS application. Workspace-specific runtime state is stored under the
+project directory:
+
+```text
+workspace.json
+notes\
+.maestri\routines.json
+.maestri\scrollback\
+```
+
+Global presets, roles, recent projects, and SSH preferences are stored outside
+the workspace. SSH credentials are not persisted in `workspace.json` or in the
+remote wrapper.
+
+## `omaestri` CLI
+
+The app injects `MAESTRI_SOCKET`, `MAESTRI_TERMINAL_ID`, and a per-session
+`MAESTRI_TOKEN` into managed terminal processes. The companion CLI uses those
+values automatically:
+
+```powershell
+omaestri list
+omaestri check "Worker" 100
+omaestri ask "Worker" "Run the tests and summarize failures"
+omaestri note read "Plan"
+omaestri note write "Plan" "Updated status"
+omaestri portal inspect "Docs"
+omaestri portal click "Docs" "button[type=submit]"
+omaestri portal fill "Docs" "input[name=q]" "Tauri"
+omaestri portal navigate "Docs" "https://tauri.app"
+omaestri portal screenshot "Docs" ".\docs.png"
+omaestri recruit "Reviewer" --preset "Codex" --role "Review the implementation"
+omaestri connect "Reviewer" "Plan"
+omaestri role assign "Reviewer" "Security Auditor"
+omaestri dismiss "Reviewer"
+```
+
+Targets may be addressed by unambiguous name or UUID. Commands are limited to
+nodes directly authorized by canvas connections; unknown, ambiguous,
+disconnected, stale, or spoofed identities are rejected.
+
+## Release build
+
+Build the CLI, frontend, Tauri application, MSI, and NSIS installer:
 
 ```powershell
 .\scripts\Build-MaestriRelease.ps1
 Get-ChildItem src-tauri\target\release\bundle -Recurse
-Get-FileHash src-tauri\target\release\bundle\msi\*.msi -Algorithm SHA256
-Get-FileHash src-tauri\target\release\bundle\nsis\*.exe -Algorithm SHA256
 ```
 
-The Tauri resource map packages `src-tauri\target\release\omaestri.exe` as
-`omaestri.exe` in the application resources for both MSI and NSIS. Validate
-that mapping without compiling or opening the application:
+Validate the resource and bundle configuration without compiling:
 
 ```powershell
 .\scripts\Build-MaestriRelease.ps1 -ValidateOnly
 ```
 
-## CLI build and installation
-
-Build and stage the Windows CLI with PowerShell:
+Build or install only the CLI:
 
 ```powershell
-pwsh -NoProfile -File .\scripts\Build-Omaestri.ps1
-pwsh -NoProfile -File .\scripts\Install-Omaestri.ps1
+.\scripts\Build-Omaestri.ps1
+.\scripts\Install-Omaestri.ps1
 ```
 
-The release binary is built at `src-cli\target\release\omaestri.exe` and is
-copied by default to `src-tauri\target\release\omaestri.exe`, alongside the
-native app release target. An explicit destination can be supplied without
-removing anything:
+The release scripts do not publish artifacts, modify the user's persistent
+`PATH`, or sign binaries. Production distribution still requires a Windows
+code-signing certificate and installation testing on a clean machine.
 
-```powershell
-pwsh -NoProfile -File .\scripts\Install-Omaestri.ps1 `
-  -DestinationDirectory 'C:\Apps\OpenMaestri'
-```
+## Security boundaries
 
-The scripts create missing directories and overwrite only the destination
-`omaestri.exe`; they do not clean or delete directories. Run PowerShell from
-the project root or pass `-ProjectRoot` explicitly. No administrator rights
-are required unless the selected destination is protected by Windows.
+- HTTP IPC binds to `127.0.0.1` on an ephemeral port.
+- Credentials are generated per terminal session and revoked on stop, exit,
+  restart, or replacement.
+- Canvas connections define which terminals, notes, and portals a caller can
+  access.
+- Note paths are confined to the workspace `notes` directory and reject
+  traversal, UNC/device paths, ADS, symlinks, junctions, and hardlinks.
+- Floor worktrees are confined to their expected root and validate repository,
+  branch, and dirty state before landing.
+- SSH uses `%WINDIR%\System32\OpenSSH\ssh.exe` directly with batch mode,
+  strict host-key handling, loopback-only reverse forwarding, and no shell
+  interpolation of connection parameters.
+- Portal automation enforces timeouts and payload limits; sensitive input
+  metadata is redacted.
 
-To use the staged CLI in the current PowerShell session, add its directory to
-`PATH`:
-
-```powershell
-$cliDirectory = (Resolve-Path .\src-tauri\target\release).Path
-$env:Path = "$cliDirectory;$env:Path"
-omaestri.exe --help
-```
-
-For a persistent PATH entry, add the same directory through Windows User
-Environment Variables. Existing terminal processes keep their old PATH, so
-open a new terminal after changing it. The app can also launch the binary by
-absolute path from this staged directory.
-
-## Native routines + ConPTY smoke
-
-The native smoke creates a disposable workspace, starts the release app,
-opens the fixture through Windows UI Automation, runs a persisted command
-routine, and verifies `.maestri\routines.json` execution persistence plus
-`preRunScript` and command markers written through the Manager ConPTY.
-
-The syntax and fixture checks are GUI-free:
-
-```powershell
-.\scripts\Invoke-MaestroRoutineConptySmoke.ps1 -SelfTest
-```
-
-Run the interactive native flow:
-
-```powershell
-.\scripts\Invoke-MaestroRoutineConptySmoke.ps1 `
-  -Configuration Release `
-  -TimeoutSeconds 120
-```
-
-It requires an interactive Windows desktop, WebView2, and UI Automation
-access. The app has no command-line workspace-open contract, so the real flow
-uses its native **Abrir…** dialog; `-SelfTest` never starts the app or opens a
-GUI. The script only terminates the process tree it started. Use
-`-KeepArtifacts` for post-failure inspection.
-
-## IPC contract
-
-Commands are invoked through Tauri's `invoke` API:
-
-| Command | Arguments | Purpose |
-|---|---|---|
-| `terminal_create` | `id`, `cols`, `rows`, optional `cwd`, `shell` | Starts a session using the requested shell |
-| `terminal_write` | `id`, `data` | Writes UTF-8 input to the PTY |
-| `terminal_resize` | `id`, `cols`, `rows` | Resizes the terminal |
-| `terminal_stop` | `id` | Kills and removes a session |
-| `terminal_list` | none | Lists native PTY sessions |
-
-Events are emitted to the Tauri event bus:
-
-- `app://ready`: `{ "version": "...", "platform": "windows" }`
-- `terminal://output`: `{ "terminalId": "...", "data": "..." }`
-- `terminal://exited`: `{ "terminalId": "...", "code": 0, "signal": null }`
-
-The event listeners must be registered before starting a session. A session
-is stopped when the Tauri runtime releases its managed terminal registry at
-process exit.
-
-## Security and packaging notes
-
-The shell starts `powershell.exe` by default. A
-caller-provided command is executed with the current user privileges, so the
-frontend must treat command, arguments, working directory, and environment as
-trusted local input. The agent CLI server binds only to `127.0.0.1` on an
-ephemeral port. Source terminal validation exists in this first slice; an
-instance token and canvas-edge authorization remain hardening work.
-
-The Tauri capability file grants only `core:default`. Add narrower explicit
-permissions if future frontend features require filesystem, shell, dialog, or
-updater access. Code signing, SmartScreen reputation, installer signing, and
-update signing are release responsibilities and are not enabled by this
-scaffold.
-
-The release scripts do not sign, publish, upload, or modify PATH. Final release
-work still requires a Windows signing certificate, MSI/NSIS signing policy,
-SmartScreen reputation work, and a human installation test on a clean machine
-with WebView2.
+Commands and hooks intentionally run with the current user's privileges. Treat
+workspace files, shell commands, hook scripts, imported preferences, and remote
+hosts as trusted local input.
 
 ## License
 
-The application is distributed under GPL-3.0-only. See
-`THIRD_PARTY_NOTICES.md` for the native scaffold dependency inventory.
+Open Maestri for Windows is distributed under GPL-3.0-only. Dependency notices
+are listed in `THIRD_PARTY_NOTICES.md`.
