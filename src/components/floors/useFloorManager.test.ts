@@ -216,4 +216,31 @@ describe("useFloorManager & FloorController Integration Tests", () => {
     expect(resultActive).toBe(true);
     expect(mockSetFloors).toHaveBeenCalledWith(updatedFloors);
   });
+
+  it("bloqueia estritamente invocações de IPC nativo local quando locationType é ssh", async () => {
+    const sshDoc = {
+      ...initialDoc,
+      payload: {
+        ...initialDoc.payload,
+        id: "ws-ssh",
+        locationType: "ssh" as const,
+      },
+    };
+    useWorkspaceStore.setState({ currentDocument: sshDoc });
+
+    const controller = new FloorController({ initialFloors: [] });
+
+    // Tentar criar floor em workspace SSH deve ser bloqueado ANTES do bridge
+    await expect(
+      controller.createFloor({
+        rootPath: "user@host:/remote/dir",
+        name: "RemoteFloor",
+        branchName: "feat/remote",
+      }),
+    ).rejects.toThrow();
+
+    expect(defaultFloorBridge.createFloor).not.toHaveBeenCalled();
+    expect(defaultFloorBridge.currentBranch).not.toHaveBeenCalled();
+    expect(defaultFloorBridge.runHooks).not.toHaveBeenCalled();
+  });
 });

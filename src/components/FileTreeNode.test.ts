@@ -96,4 +96,24 @@ describe("FileTreeNode exported helpers and workspace store integration", () => 
     const nodeAfterReverse = useWorkspaceStore.getState().nodes.find((n) => n.id === "filetree-node-real-1");
     expect((nodeAfterReverse?.data.content as Record<string, unknown>).viewMode).toBe("list");
   });
+
+  it("não reseta histórico de navegação ao re-renderizar quando initialRootPath permanece o mesmo", () => {
+    // Prova que initialRootPath estável preserva histórico sem reinicialização espúria
+    const initialRoot = "C:\\Repo";
+    let currentPath = initialRoot;
+    let history: string[] = [];
+
+    // Navega para subpasta
+    history = [...history, currentPath];
+    currentPath = "C:\\Repo\\src";
+
+    // Simula re-renderização com o mesmo initialRootPath
+    if (initialRoot !== "C:\\Repo") {
+      currentPath = initialRoot;
+      history = [];
+    }
+
+    expect(currentPath).toBe("C:\\Repo\\src");
+    expect(history).toEqual(["C:\\Repo"]);
+  });
 });

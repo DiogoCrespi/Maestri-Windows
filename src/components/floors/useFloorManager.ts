@@ -85,6 +85,11 @@ export function useFloorManager(workspaceDirectory: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentWorkspaceId, workspaceDirectory]);
 
+  const locationType = useWorkspaceStore(
+    (state) => state.currentDocument?.payload.locationType ?? "local",
+  );
+  const isSshLocation = locationType === "ssh";
+
   // Silent sync store floors into controller to break feedback loop
   useEffect(() => {
     controller.setFloors(rawFloors, { silent: true });
@@ -92,7 +97,12 @@ export function useFloorManager(workspaceDirectory: string) {
 
   // Fetch current branch for ground floor
   useEffect(() => {
-    if (!workspaceDirectory) return;
+    if (!workspaceDirectory || isSshLocation) {
+      if (isSshLocation) {
+        setGroundBranch("remote-ssh");
+      }
+      return;
+    }
     let active = true;
     controller
       .getCurrentBranch(workspaceDirectory)
@@ -109,11 +119,16 @@ export function useFloorManager(workspaceDirectory: string) {
     return () => {
       active = false;
     };
-  }, [controller, currentWorkspaceId, workspaceDirectory]);
+  }, [controller, currentWorkspaceId, isSshLocation, workspaceDirectory]);
 
   // Create Floor Handler - returns Promise<FloorEntry>
   const handleCreateFloor = useCallback(
     async (input: CreateFloorInput): Promise<FloorEntry> => {
+      if (isSshLocation) {
+        const msg = "Operações de Work Floors (git worktree) não estão disponíveis para workspaces remotos (SSH)";
+        setErrorMessage(msg);
+        throw new Error(msg);
+      }
       const activeId = currentWorkspaceId;
       if (!workspaceDirectory) throw new Error("Diretório de trabalho não definido");
       setIsLoading(true);
@@ -125,6 +140,12 @@ export function useFloorManager(workspaceDirectory: string) {
           branchName: input.branchName,
           useExistingBranch: input.useExistingBranch,
         });
+        updateFloorsForWorkspace(
+          currentWorkspaceId,
+          [...rawFloors, created],
+          useWorkspaceStore.getState().currentDocument,
+          setFloorsInStore,
+        );
         if (activeWorkspaceRef.current.id === activeId) {
           setIsCreateOpen(false);
         }
@@ -141,7 +162,7 @@ export function useFloorManager(workspaceDirectory: string) {
         }
       }
     },
-    [controller, currentWorkspaceId, workspaceDirectory],
+    [controller, currentWorkspaceId, isSshLocation, rawFloors, setFloorsInStore, workspaceDirectory],
   );
 
   // Save Hooks Handler - returns Promise<void>
@@ -173,6 +194,11 @@ export function useFloorManager(workspaceDirectory: string) {
   // Run Hooks Handler - returns Promise<void>
   const handleRunHooks = useCallback(
     async (floor: FloorItem, phase: HookPhase): Promise<void> => {
+      if (isSshLocation) {
+        const msg = "Execução de hooks não está disponível para workspaces remotos (SSH)";
+        setErrorMessage(msg);
+        throw new Error(msg);
+      }
       const activeId = currentWorkspaceId;
       if (!workspaceDirectory) return;
       setIsLoading(true);
@@ -202,6 +228,11 @@ export function useFloorManager(workspaceDirectory: string) {
   // Open Landing Dialog & Fetch Preview - returns Promise<void>
   const handleOpenLanding = useCallback(
     async (floor: FloorItem): Promise<void> => {
+      if (isSshLocation) {
+        const msg = "Preview e Landing de Floors não estão disponíveis para workspaces remotos (SSH)";
+        setErrorMessage(msg);
+        return;
+      }
       const activeId = currentWorkspaceId;
       setLandingFloorTarget(floor);
       setLandingDiffText("");
@@ -229,12 +260,17 @@ export function useFloorManager(workspaceDirectory: string) {
         }
       }
     },
-    [controller, currentWorkspaceId, groundBranch, workspaceDirectory],
+    [controller, currentWorkspaceId, groundBranch, isSshLocation, workspaceDirectory],
   );
 
   // Perform Land Handler - returns Promise<void> (Removes floor ONLY after successful land)
   const handleLandFloor = useCallback(
     async (input: LandFloorInput): Promise<void> => {
+      if (isSshLocation) {
+        const msg = "Landing de Floors não está disponível para workspaces remotos (SSH)";
+        setErrorMessage(msg);
+        throw new Error(msg);
+      }
       const activeId = currentWorkspaceId;
       if (!landingFloorTarget || !workspaceDirectory) return;
       setIsLoading(true);
@@ -275,12 +311,17 @@ export function useFloorManager(workspaceDirectory: string) {
         }
       }
     },
-    [controller, currentWorkspaceId, landingFloorTarget, workspaceDirectory],
+    [controller, currentWorkspaceId, isSshLocation, landingFloorTarget, workspaceDirectory],
   );
 
   // Delete Floor Handler - returns Promise<void>
   const handleDeleteFloor = useCallback(
     async (input: DeleteFloorInput): Promise<void> => {
+      if (isSshLocation) {
+        const msg = "Remoção de Floors (git worktree) não está disponível para workspaces remotos (SSH)";
+        setErrorMessage(msg);
+        throw new Error(msg);
+      }
       const activeId = currentWorkspaceId;
       if (!deleteFloorTarget || !workspaceDirectory) return;
       setIsLoading(true);
@@ -307,7 +348,7 @@ export function useFloorManager(workspaceDirectory: string) {
         }
       }
     },
-    [controller, currentWorkspaceId, deleteFloorTarget, workspaceDirectory],
+    [controller, currentWorkspaceId, deleteFloorTarget, isSshLocation, workspaceDirectory],
   );
 
   return {

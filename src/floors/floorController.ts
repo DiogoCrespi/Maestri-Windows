@@ -145,6 +145,11 @@ export class FloorController {
   public async createFloor(params: CreateFloorParams): Promise<FloorEntry> {
     const { rootPath, name, branchName, useExistingBranch, hooks } = params;
     const trimmedPath = rootPath.trim();
+    if (trimmedPath.includes("@") || trimmedPath.startsWith("ssh://")) {
+      const msg = "Operações de Work Floors (git worktree) não estão disponíveis para workspaces remotos (SSH)";
+      this.lastError = msg;
+      throw new Error(msg);
+    }
     const trimmedName = name.trim();
     const trimmedBranch = branchName.trim();
 

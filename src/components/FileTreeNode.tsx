@@ -91,11 +91,16 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const [selectedEntryPath, setSelectedEntryPath] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState<boolean>(false);
 
+  const locationType = useWorkspaceStore(
+    (state) => state.currentDocument?.payload.locationType ?? "local",
+  );
+  const isSshLocation = locationType === "ssh";
+
   const viewMode: "list" | "grid" =
     nodeData?.content?.viewMode === "grid" || nodeData?.viewMode === "grid" ? "grid" : "list";
 
   useEffect(() => {
-    setCurrentPath((current) => current === initialRootPath ? current : initialRootPath);
+    setCurrentPath(initialRootPath);
     setHistory([]);
     setSelectedEntryPath(null);
   }, [initialRootPath]);
@@ -109,6 +114,12 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   };
 
   const fetchDirectory = useCallback(async (dirPath: string) => {
+    if (isSshLocation) {
+      setIsLoading(false);
+      setError("Navegação de arquivos não disponível para workspaces remotos (SSH)");
+      setEntries([]);
+      return;
+    }
     setIsLoading(true);
     setError(null);
     try {
@@ -130,7 +141,7 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [showHidden]);
+  }, [isSshLocation, showHidden]);
 
   useEffect(() => {
     fetchDirectory(currentPath);
