@@ -305,6 +305,10 @@ impl TerminalSession {
             worker.stop_and_join();
         }
 
+        if let Some(pid) = self.pid {
+            let _ = crate::remote_terminal_contract::kill_process_tree_windows(pid);
+        }
+
         let mut killer = self
             .killer
             .lock()
@@ -1131,6 +1135,12 @@ fn terminal_create_ssh_with_registry<R: Runtime>(
 ) -> Result<TerminalInfo, String> {
     validate_id(&id)?;
     validate_size(cols, rows)?;
+
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let ssh_dir = std::path::PathBuf::from(&home).join(".ssh");
+        let known_hosts = ssh_dir.join("known_hosts");
+        crate::remote_terminal_contract::check_ssh_path_security(&ssh_dir, &known_hosts)?;
+    }
 
     let active_config = ssh_manager
         .active_config()

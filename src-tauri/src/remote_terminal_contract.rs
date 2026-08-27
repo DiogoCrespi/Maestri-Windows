@@ -1,9 +1,11 @@
 //! Seam & Contract for SSH Remote Terminal Sessions.
 //!
 //! Enforces zero-secret CLI arguments, READY/ESTABLISHED handshake state machine,
-//! Base64 payload encoding, and marker filtering for scrollback/output events.
+//! Base64 payload encoding, OSC 52 & dangerous sequence sanitization, reparse point confinement,
+//! process tree cleanup, and credential isolation.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +45,70 @@ pub fn validate_location_type(location_type: Option<&str>) -> Result<&'static st
         Some("ssh") => Ok("ssh"),
         Some(other) => Err(format!("invalid locationType: '{other}'. Expected 'local' or 'ssh'")),
     }
+}
+
+pub fn check_ssh_path_security(ssh_dir: &Path, known_hosts: &Path) -> Result<(), String> {
+    let check_single_path = |path: &Path| -> Result<(), String> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let meta = std::fs::symlink_metadata(path)
+            .map_err(|e| format!("Failed to read metadata for '{}': {e}", path.display()))?;
+
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "Security Error: SSH path '{}' is a symlink",
+                path.display()
+            ));
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+                return Err(format!(
+                    "Security Error: SSH path '{}' is a reparse point / junction",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
+    };
+
+    if ssh_dir.exists() {
+        let mut current = ssh_dir.to_path_buf();
+        while current.parent().is_some() {
+            if current.exists() {
+                check_single_path(&current)?;
+            }
+            if !current.pop() {
+                break;
+            }
+        }
+    }
+
+    if known_hosts.exists() {
+        check_single_path(known_hosts)?;
+    }
+
+    Ok(())
+}
+
+pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
+    if pid == 0 {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let pid_str = pid.to_string();
+        let _ = std::process::Command::new("taskkill.exe")
+            .args(["/F", "/T", "/PID", &pid_str])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    Ok(())
 }
 
 pub fn build_remote_bootstrap_command(nonce: &str) -> String {
@@ -154,6 +220,7 @@ pub struct HandshakeBuffer {
     buffer: Vec<u8>,
     ready_detected: bool,
     established_detected: bool,
+    osc52_in_progress: bool,
 }
 
 impl HandshakeBuffer {
@@ -177,12 +244,13 @@ impl HandshakeBuffer {
             event = Some(HandshakeEvent::Established);
         }
 
-        let clean_output = self.filter_markers(&self.buffer, nonce);
+        let clean_output = self.sanitize_and_filter(&self.buffer, nonce);
         (event, clean_output)
     }
 
-    pub fn filter_markers(&self, data: &[u8], nonce: &str) -> Vec<u8> {
-        let text = String::from_utf8_lossy(data);
+    pub fn sanitize_and_filter(&mut self, data: &[u8], nonce: &str) -> Vec<u8> {
+        let sanitized = self.strip_osc52(data);
+        let text = String::from_utf8_lossy(&sanitized);
         let ready_pattern = format!("READY:{nonce}");
         let est_pattern = format!("ESTABLISHED:{nonce}");
 
@@ -199,6 +267,34 @@ impl HandshakeBuffer {
             cleaned.pop();
         }
         cleaned.into_bytes()
+    }
+
+    pub fn strip_osc52(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(data.len());
+        let mut idx = 0;
+
+        while idx < data.len() {
+            if self.osc52_in_progress {
+                if data[idx] == 0x07 {
+                    self.osc52_in_progress = false;
+                    idx += 1;
+                } else if data[idx] == 0x1b && idx + 1 < data.len() && data[idx + 1] == b'\\' {
+                    self.osc52_in_progress = false;
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
+            } else {
+                if data[idx] == 0x1b && idx + 4 < data.len() && &data[idx..idx + 5] == b"\x1b]52;" {
+                    self.osc52_in_progress = true;
+                    idx += 5;
+                } else {
+                    out.push(data[idx]);
+                    idx += 1;
+                }
+            }
+        }
+        out
     }
 }
 
@@ -223,7 +319,6 @@ mod tests {
         assert!(args_str.contains("user1@192.168.1.10"));
         assert!(args_str.contains("READY:0123456789abcdef"));
 
-        // Prove NO secret token, terminal ID, CWD or command is present in arguments!
         assert!(!args_str.contains("secret-token"));
         assert!(!args_str.contains("term-id-123"));
         assert!(!args_str.contains("/home/user/workspace"));
@@ -235,7 +330,7 @@ mod tests {
         let mut hs = HandshakeBuffer::new();
 
         let chunk1 = b"Connecting...\r\nRE";
-        let (evt1, out1) = hs.process_chunk(chunk1, nonce);
+        let (evt1, _out1) = hs.process_chunk(chunk1, nonce);
         assert_eq!(evt1, None);
 
         let chunk2 = b"ADY:a1b2c3d4e5f60718\r\n";
@@ -251,7 +346,6 @@ mod tests {
         let mut state = HandshakeState::WaitingReady { nonce: "nonce123".to_string() };
         assert_ne!(state, HandshakeState::ReadyReceived { nonce: "nonce123".to_string() });
 
-        // Simulate READY received
         state = HandshakeState::ReadyReceived { nonce: "nonce123".to_string() };
         assert_eq!(state, HandshakeState::ReadyReceived { nonce: "nonce123".to_string() });
 
@@ -272,16 +366,93 @@ mod tests {
     #[test]
     fn test_remote_contract_token_never_in_sanitized_output() {
         let nonce = "1122334455667788";
-        let hs = HandshakeBuffer::new();
+        let mut hs = HandshakeBuffer::new();
 
         let raw = format!("READY:{nonce}\r\nSome normal output line\r\nESTABLISHED:{nonce}\r\nSecond line");
-        let filtered = hs.filter_markers(raw.as_bytes(), nonce);
+        let filtered = hs.sanitize_and_filter(raw.as_bytes(), nonce);
         let filtered_str = String::from_utf8_lossy(&filtered);
 
         assert!(!filtered_str.contains(&format!("READY:{nonce}")));
         assert!(!filtered_str.contains(&format!("ESTABLISHED:{nonce}")));
         assert!(filtered_str.contains("Some normal output line"));
         assert!(filtered_str.contains("Second line"));
+    }
+
+    #[test]
+    fn test_remote_contract_osc52_sanitization_and_tui_preservation() {
+        let nonce = "9988776655443322";
+        let mut hs = HandshakeBuffer::new();
+
+        // OSC 52 sequence embedded between TUI color escape sequences
+        let raw_chunk1 = b"\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m";
+        let (_evt, clean1) = hs.process_chunk(raw_chunk1, nonce);
+        let clean1_str = String::from_utf8_lossy(&clean1);
+
+        assert!(clean1_str.contains("\x1b[31mRed Text\x1b[0m"));
+        assert!(clean1_str.contains("\x1b[32mGreen Text\x1b[0m"));
+        assert!(!clean1_str.contains("52;c;c2Vjc2V0X2NsaXBib2FyZA=="));
+
+        // Fragmented OSC 52 across 2 chunks
+        let mut hs_frag = HandshakeBuffer::new();
+        let chunk_a = b"Before \x1b]52;c;c2Vjc2V";
+        let chunk_b = b"0X2NsaXBib2FyZA==\x07 After";
+
+        let (_evt_a, clean_a) = hs_frag.process_chunk(chunk_a, nonce);
+        let (_evt_b, clean_b) = hs_frag.process_chunk(chunk_b, nonce);
+
+        let clean_a_str = String::from_utf8_lossy(&clean_a);
+        let clean_b_str = String::from_utf8_lossy(&clean_b);
+
+        assert_eq!(clean_a_str, "Before ");
+        assert_eq!(clean_b_str, " After");
+    }
+
+    #[test]
+    fn test_remote_contract_ssh_reparse_point_confinement() {
+        let temp_dir = std::env::temp_dir().join(format!("maestri_ssh_test_{}", generate_nonce()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let ssh_dir = temp_dir.join(".ssh");
+        let known_hosts = ssh_dir.join("known_hosts");
+        let _ = std::fs::create_dir_all(&ssh_dir);
+        let _ = std::fs::write(&known_hosts, "example.com ssh-rsa AAAAB3NzaC1yc2E...");
+
+        // Real regular files/dir pass security check
+        assert!(check_ssh_path_security(&ssh_dir, &known_hosts).is_is_ok());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_remote_contract_session_credential_isolation() {
+        let payload_a = RemotePayload {
+            terminal_id: "session-a".to_string(),
+            token: "ipc-token-secret-alpha-12345".to_string(),
+            tunnel_port: 7433,
+            cwd: Some("/home/user/a".to_string()),
+            command: None,
+        };
+
+        let payload_b = RemotePayload {
+            terminal_id: "session-b".to_string(),
+            token: "ipc-token-secret-beta-67890".to_string(),
+            tunnel_port: 7433,
+            cwd: Some("/home/user/b".to_string()),
+            command: None,
+        };
+
+        let encoded_a = encode_payload(&payload_a).unwrap();
+        let encoded_b = encode_payload(&payload_b).unwrap();
+
+        assert!(encoded_a.contains("session-a"));
+        assert!(encoded_a.contains("ipc-token-secret-alpha-12345"));
+        assert!(!encoded_a.contains("ipc-token-secret-beta-67890"));
+
+        assert!(encoded_b.contains("session-b"));
+        assert!(encoded_b.contains("ipc-token-secret-beta-67890"));
+        assert!(!encoded_b.contains("ipc-token-secret-alpha-12345"));
+
+        assert_ne!(payload_a.token, payload_b.token);
     }
 
     #[test]
@@ -317,7 +488,6 @@ mod tests {
         let mut active_sessions: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
         active_sessions.insert("ssh-term-1".to_string(), true);
         
-        // Simulate disconnect
         active_sessions.remove("ssh-term-1");
         assert!(!active_sessions.contains_key("ssh-term-1"));
     }
