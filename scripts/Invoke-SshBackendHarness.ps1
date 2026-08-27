@@ -91,8 +91,12 @@ if (-not $isWindowsOS -or -not $cargoCommand -or -not $rustcCommand) {
 }
 
 $manifestPath = Join-Path $ProjectRoot "src-tauri/Cargo.toml"
+$cliManifestPath = Join-Path $ProjectRoot "src-cli/Cargo.toml"
+$cliTargetPath = Join-Path $ProjectRoot "src-tauri/target"
+$cliExecutablePath = Join-Path $cliTargetPath "release/omaestri.exe"
 $contractPath = Join-Path $ProjectRoot "src-tauri/src/ssh_contract.rs"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $cliManifestPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
     Write-Host "[ERROR] SSH native sources are incomplete."
     Exit-WithCode -Code 1
@@ -106,6 +110,12 @@ if (-not $testExecutable.StartsWith($temporaryRoot, [System.StringComparison]::O
 }
 
 try {
+    $cliArguments = "build --manifest-path `"$cliManifestPath`" --release --target-dir `"$cliTargetPath`""
+    [void](Invoke-GatedProcess -Executable $cargoCommand.Source -Arguments $cliArguments -Label "omaestri-cli-release")
+    if (-not (Test-Path -LiteralPath $cliExecutablePath -PathType Leaf)) {
+        throw "CLI build succeeded without producing $cliExecutablePath"
+    }
+
     $cargoArguments = "check --manifest-path `"$manifestPath`" --lib"
     [void](Invoke-GatedProcess -Executable $cargoCommand.Source -Arguments $cargoArguments -Label "cargo-check")
 
