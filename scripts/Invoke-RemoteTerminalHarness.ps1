@@ -84,7 +84,7 @@ $requiredTests = @(
     "test_remote_contract_fragmented_established_marker_and_output",
     "test_remote_contract_payload_sent_only_after_ready",
     "test_remote_contract_token_never_in_sanitized_output",
-    "test_remote_contract_osc52_sanitization_and_tui_preservation",
+    "test_remote_contract_osc52_all_prefix_boundary_splits_and_terminators",
     "test_remote_contract_reparse_attribute_decision_helper",
     "test_remote_contract_ssh_reparse_point_confinement",
     "test_remote_contract_session_credential_isolation",
@@ -134,7 +134,7 @@ if ($SelfTest) {
         'test_remote_contract_fragmented_established_marker_and_output',
         'test_remote_contract_payload_sent_only_after_ready',
         'test_remote_contract_token_never_in_sanitized_output',
-        'test_remote_contract_osc52_sanitization_and_tui_preservation',
+        'test_remote_contract_osc52_all_prefix_boundary_splits_and_terminators',
         'test_remote_contract_reparse_attribute_decision_helper',
         'test_remote_contract_ssh_reparse_point_confinement',
         'test_remote_contract_session_credential_isolation',
@@ -158,7 +158,21 @@ if ($SelfTest) {
         }
     }
 
-    Write-Host "[SELF-TEST] Remote terminal harness AST, cargo test execution wiring, and contract test matrix verified (0 errors)."
+    if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
+        Write-Host "[ERROR] Self-test failed: remote terminal contract source is missing: $contractPath"
+        Exit-WithCode -Code 1
+    }
+
+    $contractContent = Get-Content -LiteralPath $contractPath -Raw
+    foreach ($testName in $requiredTests) {
+        $functionPattern = "(?m)^\s*fn\s+$([regex]::Escape($testName))\s*\("
+        if ($contractContent -notmatch $functionPattern) {
+            Write-Host "[ERROR] Self-test failed: required test '$testName' does not exist in the Rust contract"
+            Exit-WithCode -Code 1
+        }
+    }
+
+    Write-Host "[SELF-TEST] Remote terminal harness AST, cargo test wiring, and Rust contract test matrix verified (0 errors)."
     Exit-WithCode -Code 0
 }
 
