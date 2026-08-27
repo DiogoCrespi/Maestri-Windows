@@ -15,6 +15,7 @@ mod scrollback;
 mod shells;
 mod ssh;
 mod ssh_contract;
+mod remote_terminal_contract;
 mod terminal;
 mod workspace;
 

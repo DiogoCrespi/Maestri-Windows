@@ -82,6 +82,21 @@ impl SshManager {
         Ok(())
     }
 
+    pub fn active_config(&self) -> Option<SshConfig> {
+        let mut guard = self.active.lock().ok()?;
+        if let Some(active) = guard.as_mut() {
+            match active.child.try_wait() {
+                Ok(None) => Some(active.config.clone()),
+                _ => {
+                    *guard = None;
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
     fn status(&self) -> Result<SshStatus, String> {
         let mut guard = self
             .active
@@ -335,7 +350,13 @@ pub fn ssh_connect(manager: State<'_, SshManager>, config: SshConfig) -> Result<
 }
 
 #[tauri::command]
-pub fn ssh_disconnect(manager: State<'_, SshManager>) -> Result<SshStatus, String> {
+pub fn ssh_disconnect(
+    manager: State<'_, SshManager>,
+    terminals: Option<State<'_, crate::terminal::TerminalRegistry>>,
+) -> Result<SshStatus, String> {
+    if let Some(registry) = terminals {
+        registry.stop_remote_all();
+    }
     manager.disconnect()?;
     Ok(SshStatus::disconnected(None))
 }

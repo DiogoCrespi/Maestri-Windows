@@ -196,6 +196,7 @@ struct TerminalSession {
     recent_output: Mutex<VecDeque<String>>,
     scrollback_worker: Mutex<ScrollbackWorker>,
     registry_store: Arc<RwLock<Option<Arc<ScrollbackStore>>>>,
+    is_remote: bool,
 }
 
 impl TerminalSession {
@@ -400,6 +401,20 @@ impl TerminalRegistry {
             let token = session.session_token;
             let _ = session.request_stop();
             let _ = self.remove_exact(&session.id, token);
+        }
+    }
+
+    pub fn stop_remote_all(&self) {
+        let sessions = match self.sessions.read() {
+            Ok(sessions) => sessions.values().cloned().collect::<Vec<_>>(),
+            Err(_) => return,
+        };
+        for session in sessions {
+            if session.is_remote {
+                let token = session.session_token;
+                let _ = session.request_stop();
+                let _ = self.remove_exact(&session.id, token);
+            }
         }
     }
 
@@ -952,6 +967,7 @@ fn terminal_create_with_registry<R: Runtime>(
         recent_output: Mutex::new(VecDeque::new()),
         scrollback_worker: Mutex::new(ScrollbackWorker::spawn(id.clone())),
         registry_store: Arc::clone(&registry.scrollback_store),
+        is_remote: false,
     });
 
     if let Err(error) = registry.insert(Arc::clone(&session)) {
@@ -968,11 +984,260 @@ fn terminal_create_with_registry<R: Runtime>(
     session.info()
 }
 
+fn start_ssh_threads<R: Runtime>(
+    app: AppHandle<R>,
+    registry_weak: Weak<RwLock<HashMap<String, Arc<TerminalSession>>>>,
+    session: Arc<TerminalSession>,
+    mut reader: Box<dyn Read + Send>,
+    nonce: String,
+    tunnel_port: u16,
+    cwd: Option<String>,
+    command: Option<String>,
+) -> Result<(), String> {
+    let waiter_registry = registry_weak.clone();
+    let waiter_id = session.id.clone();
+    let waiter_token = session.session_token;
+    let waiter_child = Arc::clone(&session);
+    let waiter_app = app.clone();
+
+    thread::Builder::new()
+        .name(format!("maestri-terminal-waiter-{waiter_id}-{waiter_token}"))
+        .spawn(move || {
+            let code = match waiter_child.child.lock() {
+                Ok(mut child) => child.wait().ok().and_then(|exit| exit.exit_code().map(|c| c as i32)),
+                Err(_) => None,
+            };
+
+            let _ = waiter_child.transition_exited();
+
+            let signal = if code.is_none() {
+                Some("SIGKILL".to_string())
+            } else {
+                None
+            };
+            let event = TerminalExitedEvent {
+                terminal_id: waiter_id.clone(),
+                exit_code: code,
+                signal,
+            };
+            let _ = waiter_app.emit("terminal://exited", event);
+
+            if let Some(sessions) = waiter_registry.upgrade() {
+                if let Ok(mut sessions) = sessions.write() {
+                    if let Some(current) = sessions.get(&waiter_id) {
+                        if current.session_token == waiter_token {
+                            sessions.remove(&waiter_id);
+                        }
+                    }
+                }
+            }
+        })
+        .map_err(|error| format!("cannot start SSH terminal waiter: {error}"))?;
+
+    let reader_session = Arc::clone(&session);
+    let reader_id = session.id.clone();
+    let reader_token = session.session_token;
+    let reader_app = app;
+    let reader_registry = registry_weak;
+
+    thread::Builder::new()
+        .name(format!("maestri-ssh-terminal-reader-{reader_id}-{reader_token}"))
+        .spawn(move || {
+            let mut buffer = vec![0_u8; READ_BUFFER_BYTES];
+            let mut hs_buffer = crate::remote_terminal_contract::HandshakeBuffer::new();
+            let mut payload_sent = false;
+            let start_time = std::time::Instant::now();
+            let timeout_duration = std::time::Duration::from_secs(10);
+
+            loop {
+                if !payload_sent && start_time.elapsed() > timeout_duration {
+                    let _ = reader_session.request_stop();
+                    break;
+                }
+
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        let chunk = &buffer[..size];
+                        let (event, clean_bytes) = hs_buffer.process_chunk(chunk, &nonce);
+
+                        if let Some(crate::remote_terminal_contract::HandshakeEvent::Ready) = event {
+                            if !payload_sent {
+                                payload_sent = true;
+                                let payload = crate::remote_terminal_contract::RemotePayload {
+                                    terminal_id: reader_session.id.clone(),
+                                    token: reader_session.ipc_credential.clone(),
+                                    tunnel_port,
+                                    cwd: cwd.clone(),
+                                    command: command.clone(),
+                                };
+                                if let Ok(payload_str) = crate::remote_terminal_contract::encode_payload(&payload) {
+                                    let _ = reader_session.write_input(&payload_str);
+                                }
+                            }
+                        }
+
+                        if clean_bytes.is_empty() {
+                            continue;
+                        }
+
+                        let data = String::from_utf8_lossy(&clean_bytes).into_owned();
+                        if let Ok(mut chunks) = reader_session.recent_output.lock() {
+                            chunks.push_back(data.clone());
+                            while chunks.len() > MAX_SCROLLBACK_CHUNKS {
+                                chunks.pop_front();
+                            }
+                        }
+
+                        if let Some(registry_ref) = reader_registry.upgrade() {
+                            let reg = TerminalRegistry {
+                                sessions: registry_ref,
+                                scrollback_store: Arc::clone(&reader_session.registry_store),
+                            };
+                            if let Some(store) = reg.get_scrollback_store() {
+                                let gen = store.generation();
+                                if let Ok(worker) = reader_session.scrollback_worker.lock() {
+                                    let _ = worker.try_enqueue(store, gen, data.clone());
+                                }
+                            }
+                        }
+
+                        let sequence = reader_session.sequence.fetch_add(1, Ordering::Relaxed) + 1;
+                        let event = TerminalOutputEvent {
+                            terminal_id: reader_id.clone(),
+                            data,
+                            sequence,
+                        };
+                        let _ = reader_app.emit("terminal://output", event);
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .map_err(|error| format!("cannot start SSH terminal reader: {error}"))?;
+
+    Ok(())
+}
+
+fn terminal_create_ssh_with_registry<R: Runtime>(
+    app: AppHandle<R>,
+    registry: &TerminalRegistry,
+    ssh_manager: &crate::ssh::SshManager,
+    id: String,
+    cols: u16,
+    rows: u16,
+    cwd: Option<String>,
+    command: Option<String>,
+) -> Result<TerminalInfo, String> {
+    validate_id(&id)?;
+    validate_size(cols, rows)?;
+
+    let active_config = ssh_manager
+        .active_config()
+        .ok_or_else(|| "SSH tunnel is not active. Connect SSH tunnel before creating remote terminal".to_string())?;
+
+    let executable = crate::ssh::resolve_ssh_executable()?;
+    let nonce = crate::remote_terminal_contract::generate_nonce();
+    let ssh_args = crate::remote_terminal_contract::build_ssh_remote_args(
+        &active_config.user,
+        &active_config.host,
+        active_config.port,
+        &nonce,
+    );
+
+    if let Ok(existing) = registry.get(&id) {
+        let _ = existing.request_stop();
+        let _ = registry.remove_exact(&id, existing.session_token)?;
+    }
+
+    let ipc_credential = generate_ipc_credential()?;
+    let mut pty_command = CommandBuilder::new(executable);
+    pty_command.args(ssh_args);
+
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            cols,
+            rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| format!("cannot create pseudo-terminal: {error}"))?;
+
+    let child = pair
+        .slave
+        .spawn_command(pty_command)
+        .map_err(|error| format!("cannot spawn SSH remote terminal: {error}"))?;
+    let pid = child.process_id();
+    let mut setup_killer = child.clone_killer();
+    let reader = match pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = setup_killer.kill();
+            return Err(format!("cannot open terminal reader: {error}"));
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = setup_killer.kill();
+            return Err(format!("cannot open terminal writer: {error}"));
+        }
+    };
+    let killer = child.clone_killer();
+    let session_token = SESSION_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let session = Arc::new(TerminalSession {
+        id: id.clone(),
+        session_token,
+        ipc_credential: ipc_credential.clone(),
+        pid,
+        master: Mutex::new(pair.master),
+        writer: Mutex::new(writer),
+        child: Mutex::new(child),
+        killer: Mutex::new(killer),
+        state: Mutex::new(Lifecycle::Running),
+        cols: Mutex::new(cols),
+        rows: Mutex::new(rows),
+        stop_requested: AtomicBool::new(false),
+        exit_emitted: AtomicBool::new(false),
+        sequence: AtomicU64::new(0),
+        recent_output: Mutex::new(VecDeque::new()),
+        scrollback_worker: Mutex::new(ScrollbackWorker::spawn(id.clone())),
+        registry_store: Arc::clone(&registry.scrollback_store),
+        is_remote: true,
+    });
+
+    if let Err(error) = registry.insert(Arc::clone(&session)) {
+        let _ = session.request_stop();
+        return Err(error);
+    }
+
+    let registry_weak = Arc::downgrade(&registry.sessions);
+    if let Err(error) = start_ssh_threads(
+        app,
+        registry_weak,
+        Arc::clone(&session),
+        reader,
+        nonce,
+        active_config.tunnel_port,
+        cwd,
+        command,
+    ) {
+        let _ = session.request_stop();
+        let _ = registry.remove_exact(&id, session_token);
+        return Err(error);
+    }
+
+    session.info()
+}
+
 /// Creates and starts a ConPTY-backed session.
 #[tauri::command]
 pub fn terminal_create(
     app: AppHandle,
     registry: State<'_, TerminalRegistry>,
+    ssh_manager: State<'_, crate::ssh::SshManager>,
     id: String,
     cols: u16,
     rows: u16,
@@ -981,19 +1246,34 @@ pub fn terminal_create(
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     command: Option<String>,
+    location_type: Option<String>,
 ) -> Result<TerminalInfo, String> {
-    terminal_create_with_registry(
-        app,
-        &registry,
-        id,
-        cols,
-        rows,
-        cwd,
-        shell,
-        args,
-        env,
-        command,
-    )
+    let loc = crate::remote_terminal_contract::validate_location_type(location_type.as_deref())?;
+    if loc == "ssh" {
+        terminal_create_ssh_with_registry(
+            app,
+            &registry,
+            &ssh_manager,
+            id,
+            cols,
+            rows,
+            cwd,
+            command,
+        )
+    } else {
+        terminal_create_with_registry(
+            app,
+            &registry,
+            id,
+            cols,
+            rows,
+            cwd,
+            shell,
+            args,
+            env,
+            command,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1752,6 +2032,7 @@ mod tests {
                 recent_output: Mutex::new(VecDeque::new()),
                 scrollback_worker: Mutex::new(ScrollbackWorker::spawn(id.to_string())),
                 registry_store: Arc::clone(&registry.scrollback_store),
+                is_remote: false,
             })
         };
 
@@ -1818,6 +2099,7 @@ mod tests {
                 recent_output: Mutex::new(VecDeque::new()),
                 scrollback_worker: Mutex::new(ScrollbackWorker::spawn(id.clone())),
                 registry_store: Arc::clone(&registry.scrollback_store),
+                is_remote: false,
             });
 
             assert!(registry.insert(Arc::clone(&session)).is_ok());
