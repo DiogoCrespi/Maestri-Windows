@@ -141,7 +141,8 @@ pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
             let is_pid_gone = output.status.code() == Some(128)
                 || stderr_str.contains("not found")
                 || stderr_str.contains("não encontrado")
-                || stderr_str.contains("no process");
+                || stderr_str.contains("no process")
+                || stderr_str.contains("nenhum processo");
             if !is_pid_gone {
                 return Err(format!(
                     "taskkill failed for PID {pid} (exit code {:?}): {}",
@@ -274,6 +275,13 @@ impl HandshakeBuffer {
     }
 
     pub fn process_chunk(&mut self, chunk: &[u8], nonce: &str) -> (Option<HandshakeEvent>, Vec<u8>) {
+        if self.established_detected {
+            let mut data = std::mem::take(&mut self.stream_buffer);
+            data.extend_from_slice(chunk);
+            let sanitized = self.strip_osc52(&data);
+            return (None, sanitized);
+        }
+
         self.stream_buffer.extend_from_slice(chunk);
         if self.stream_buffer.len() > MAX_STREAM_BUFFER_BYTES {
             self.stream_buffer.drain(..self.stream_buffer.len() - MAX_STREAM_BUFFER_BYTES);
@@ -288,7 +296,9 @@ impl HandshakeBuffer {
         if !self.ready_detected && content_str.contains(&ready_marker) {
             self.ready_detected = true;
             event = Some(HandshakeEvent::Ready);
-        } else if self.ready_detected && !self.established_detected && content_str.contains(&established_marker) {
+        }
+
+        if self.ready_detected && !self.established_detected && content_str.contains(&established_marker) {
             self.established_detected = true;
             event = Some(HandshakeEvent::Established);
         }
@@ -301,39 +311,79 @@ impl HandshakeBuffer {
         let ready_pattern = format!("READY:{nonce}");
         let est_pattern = format!("ESTABLISHED:{nonce}");
 
-        let text = String::from_utf8_lossy(&self.stream_buffer).to_string();
+        if self.established_detected {
+            let buffer = std::mem::take(&mut self.stream_buffer);
+            let mut output = Vec::new();
 
-        let mut last_newline_pos = None;
-        for (idx, ch) in text.char_indices() {
-            if ch == '\n' {
-                last_newline_pos = Some(idx);
+            let mut start_idx = 0;
+            for i in 0..buffer.len() {
+                if buffer[i] == b'\n' {
+                    let line_slice = &buffer[start_idx..=i];
+                    let line_str = String::from_utf8_lossy(line_slice);
+                    let line_trim = line_str.trim();
+                    if !(line_trim == ready_pattern
+                        || line_trim == est_pattern
+                        || line_trim.contains(&ready_pattern)
+                        || line_trim.contains(&est_pattern))
+                    {
+                        output.extend_from_slice(line_slice);
+                    }
+                    start_idx = i + 1;
+                }
+            }
+
+            if start_idx < buffer.len() {
+                let tail_slice = &buffer[start_idx..];
+                let tail_str = String::from_utf8_lossy(tail_slice);
+                let tail_trim = tail_str.trim();
+                if !(tail_trim == ready_pattern
+                    || tail_trim == est_pattern
+                    || tail_trim.contains(&ready_pattern)
+                    || tail_trim.contains(&est_pattern))
+                {
+                    output.extend_from_slice(tail_slice);
+                }
+            }
+
+            return self.strip_osc52(&output);
+        }
+
+        let buffer = &self.stream_buffer;
+        let mut last_newline = None;
+        for i in (0..buffer.len()).rev() {
+            if buffer[i] == b'\n' {
+                last_newline = Some(i);
+                break;
             }
         }
 
-        let (lines_part, trailing_part) = match last_newline_pos {
-            Some(pos) => (&text[..=pos], &text[pos + 1..]),
-            None => ("", text.as_str()),
+        let (lines_part, remaining_part) = match last_newline {
+            Some(idx) => (&buffer[..=idx], &buffer[idx + 1..]),
+            None => (&[][..], buffer.as_slice()),
         };
 
-        let mut delta_str = String::new();
+        let mut output = Vec::new();
         if !lines_part.is_empty() {
-            for line in lines_part.lines() {
-                let line_trim = line.trim();
-                if line_trim == ready_pattern
-                    || line_trim == est_pattern
-                    || line_trim.contains(&ready_pattern)
-                    || line_trim.contains(&est_pattern)
-                {
-                    continue;
+            let mut start_idx = 0;
+            for i in 0..lines_part.len() {
+                if lines_part[i] == b'\n' {
+                    let line_slice = &lines_part[start_idx..=i];
+                    let line_str = String::from_utf8_lossy(line_slice);
+                    let line_trim = line_str.trim();
+                    if !(line_trim == ready_pattern
+                        || line_trim == est_pattern
+                        || line_trim.contains(&ready_pattern)
+                        || line_trim.contains(&est_pattern))
+                    {
+                        output.extend_from_slice(line_slice);
+                    }
+                    start_idx = i + 1;
                 }
-                delta_str.push_str(line);
-                delta_str.push('\n');
             }
         }
 
-        self.stream_buffer = trailing_part.as_bytes().to_vec();
-
-        self.strip_osc52(delta_str.as_bytes())
+        self.stream_buffer = remaining_part.to_vec();
+        self.strip_osc52(&output)
     }
 
     fn strip_osc52(&mut self, data: &[u8]) -> Vec<u8> {
@@ -400,17 +450,33 @@ mod tests {
         let chunk1 = b"Connecting...\r\nRE";
         let (evt1, out1) = hs.process_chunk(chunk1, nonce);
         assert_eq!(evt1, None);
-        assert_eq!(String::from_utf8_lossy(&out1), "Connecting...\n");
+        assert_eq!(String::from_utf8_lossy(&out1), "Connecting...\r\n");
 
         let chunk2 = b"ADY:a1b2c3d4e5f60718\r\n";
         let (evt2, out2) = hs.process_chunk(chunk2, nonce);
         assert_eq!(evt2, Some(HandshakeEvent::Ready));
         assert!(out2.is_empty());
 
-        let chunk3 = b"ESTABLISHED:a1b2c3d4e5f60718\r\nWelcome to remote terminal!\r\n";
+        let chunk3 = b"ESTABLISHED:a1b2c3d4e5f60718\r\nuser@host:~$ ";
         let (evt3, out3) = hs.process_chunk(chunk3, nonce);
         assert_eq!(evt3, Some(HandshakeEvent::Established));
-        assert_eq!(String::from_utf8_lossy(&out3), "Welcome to remote terminal!\n");
+        assert_eq!(String::from_utf8_lossy(&out3), "user@host:~$ ");
+    }
+
+    #[test]
+    fn test_remote_contract_fragmented_established_marker_and_output() {
+        let nonce = "f1f2f3f4f5f6f7f8";
+        let mut hs = HandshakeBuffer::new();
+
+        let chunk1 = format!("READY:{nonce}\r\nESTAB");
+        let (evt1, out1) = hs.process_chunk(chunk1.as_bytes(), nonce);
+        assert_eq!(evt1, Some(HandshakeEvent::Ready));
+        assert!(out1.is_empty());
+
+        let chunk2 = format!("LISHED:{nonce}\r\nuser@remote:~$ ");
+        let (evt2, out2) = hs.process_chunk(chunk2.as_bytes(), nonce);
+        assert_eq!(evt2, Some(HandshakeEvent::Established));
+        assert_eq!(String::from_utf8_lossy(&out2), "user@remote:~$ ");
     }
 
     #[test]
@@ -447,8 +513,8 @@ mod tests {
 
         assert!(!filtered_str.contains(&format!("READY:{nonce}")));
         assert!(!filtered_str.contains(&format!("ESTABLISHED:{nonce}")));
-        assert!(filtered_str.contains("Some normal output line"));
-        assert!(filtered_str.contains("Second line"));
+        assert!(filtered_str.contains("Some normal output line\r\n"));
+        assert!(filtered_str.contains("Second line\r\n"));
     }
 
     #[test]
@@ -456,13 +522,25 @@ mod tests {
         let nonce = "9988776655443322";
         let mut hs = HandshakeBuffer::new();
 
-        let raw_chunk1 = b"\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m\r\n";
-        let (_evt, clean1) = hs.process_chunk(raw_chunk1, nonce);
+        let raw_chunk1 = format!("READY:{nonce}\r\nESTABLISHED:{nonce}\r\n\x1b[31mRed Text\x1b[0m \x1b]52;c;c2Vjc2V0X2NsaXBib2FyZA==\x07 \x1b[32mGreen Text\x1b[0m\r\n");
+        let (_evt, clean1) = hs.process_chunk(raw_chunk1.as_bytes(), nonce);
         let clean1_str = String::from_utf8_lossy(&clean1);
 
         assert!(clean1_str.contains("\x1b[31mRed Text\x1b[0m"));
         assert!(clean1_str.contains("\x1b[32mGreen Text\x1b[0m"));
         assert!(!clean1_str.contains("52;c;c2Vjc2V0X2NsaXBib2FyZA=="));
+
+        let chunk_a = b"Before \x1b]52;c;c2Vjc2V";
+        let chunk_b = b"0X2NsaXBib2FyZA==\x1b\\ After";
+
+        let (_evt_a, clean_a) = hs.process_chunk(chunk_a, nonce);
+        let (_evt_b, clean_b) = hs.process_chunk(chunk_b, nonce);
+
+        let clean_a_str = String::from_utf8_lossy(&clean_a);
+        let clean_b_str = String::from_utf8_lossy(&clean_b);
+
+        assert_eq!(clean_a_str, "Before ");
+        assert_eq!(clean_b_str, " After");
     }
 
     #[test]

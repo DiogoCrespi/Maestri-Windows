@@ -306,9 +306,12 @@ impl TerminalSession {
             worker.stop_and_join();
         }
 
+        let mut remote_tree_err = None;
         if self.is_remote {
             if let Some(pid) = self.pid {
-                let _ = crate::remote_terminal_contract::kill_process_tree_windows(pid);
+                if let Err(e) = crate::remote_terminal_contract::kill_process_tree_windows(pid) {
+                    remote_tree_err = Some(e);
+                }
             }
         }
 
@@ -316,9 +319,16 @@ impl TerminalSession {
             .killer
             .lock()
             .map_err(|_| "terminal killer lock poisoned".to_string())?;
-        killer
+        let kill_res = killer
             .kill()
-            .map_err(|error| format!("terminal stop failed: {error}"))
+            .map_err(|error| format!("terminal stop failed: {error}"));
+
+        match (remote_tree_err, kill_res) {
+            (Some(tree_err), Ok(())) => Err(format!("process tree cleanup error: {tree_err}")),
+            (Some(tree_err), Err(kill_err)) => Err(format!("process tree cleanup error: {tree_err}; kill error: {kill_err}")),
+            (None, Err(kill_err)) => Err(kill_err),
+            (None, Ok(())) => Ok(()),
+        }
     }
 }
 
