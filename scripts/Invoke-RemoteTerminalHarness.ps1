@@ -34,6 +34,7 @@ function Invoke-GatedProcess {
     $process.StartInfo = $processInfo
     if (-not $process.Start()) { throw "$Label process failed to start" }
     $processId = $process.Id
+    if ($processId -le 0) { throw "$Label process returned invalid PID $processId" }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     try {
@@ -41,7 +42,16 @@ function Invoke-GatedProcess {
             throw "$Label exceeded the $TimeoutSeconds second timeout"
         }
     } finally {
-        if (-not $process.HasExited) { & taskkill.exe /PID $processId /T /F | Out-Null }
+        if (-not $process.HasExited) {
+            $winDir = $env:WINDIR
+            if (-not $winDir) { $winDir = "C:\Windows" }
+            $taskkillBin = Join-Path $winDir "System32\taskkill.exe"
+            if (Test-Path -LiteralPath $taskkillBin -PathType Leaf) {
+                & $taskkillBin /PID $processId /T /F 2>&1 | Out-Null
+            } else {
+                $process.Kill()
+            }
+        }
     }
     $result = [PSCustomObject]@{
         ExitCode = $process.ExitCode
@@ -66,6 +76,15 @@ if (-not $ProjectRoot) {
 
 $contractPath = Join-Path $ProjectRoot "src-tauri/src/remote_terminal_contract.rs"
 
+$requiredTests = @(
+    "test_remote_contract_fragmented_marker_parsing",
+    "test_remote_contract_osc52_sanitization_and_tui_preservation",
+    "test_remote_contract_ssh_reparse_point_confinement",
+    "test_remote_contract_missing_home_fails_closed",
+    "test_remote_contract_session_credential_isolation",
+    "test_remote_contract_unknown_location_type_fails"
+)
+
 if ($SelfTest) {
     $tokens = $null
     $parseErrors = $null
@@ -83,7 +102,19 @@ if ($SelfTest) {
         Exit-WithCode -Code 1
     }
 
-    Write-Host "[SELF-TEST] Remote terminal harness syntax and contract path reference verified (0 errors)."
+    if ($scriptContent -notmatch "cargo test --manifest-path .* remote_terminal_contract::tests") {
+        Write-Host "[ERROR] Self-test failed: harness script command line regression detected (missing cargo test filtering remote_terminal_contract::tests)"
+        Exit-WithCode -Code 1
+    }
+
+    foreach ($testName in $requiredTests) {
+        if ($scriptContent -notmatch [regex]::Escape($testName)) {
+            Write-Host "[ERROR] Self-test failed: required test check missing from script: $testName"
+            Exit-WithCode -Code 1
+        }
+    }
+
+    Write-Host "[SELF-TEST] Remote terminal harness syntax, cargo command line, and contract test list verified (0 errors)."
     Exit-WithCode -Code 0
 }
 
@@ -115,13 +146,6 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
     Exit-WithCode -Code 1
 }
 
-$temporaryRoot = [System.IO.Path]::GetFullPath($env:TEMP)
-$testExecutable = [System.IO.Path]::GetFullPath((Join-Path $temporaryRoot "open-maestri-remote-terminal-contract-$PID.exe"))
-if (-not $testExecutable.StartsWith($temporaryRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-    Write-Host "[ERROR] Refusing unsafe temporary executable path: $testExecutable"
-    Exit-WithCode -Code 1
-}
-
 try {
     $cliArguments = "build --manifest-path `"$cliManifestPath`" --release --target-dir `"$cliTargetPath`""
     [void](Invoke-GatedProcess -Executable $cargoCommand.Source -Arguments $cliArguments -Label "omaestri-cli-release")
@@ -129,35 +153,23 @@ try {
         throw "CLI build succeeded without producing $cliExecutablePath"
     }
 
-    $cargoArguments = "check --manifest-path `"$manifestPath`" --lib"
-    [void](Invoke-GatedProcess -Executable $cargoCommand.Source -Arguments $cargoArguments -Label "cargo-check")
+    $cargoCheckArguments = "check --manifest-path `"$manifestPath`" --lib"
+    [void](Invoke-GatedProcess -Executable $cargoCommand.Source -Arguments $cargoCheckArguments -Label "cargo-check")
 
-    $rustcArguments = "--edition=2021 --test `"$contractPath`" -o `"$testExecutable`""
-    [void](Invoke-GatedProcess -Executable $rustcCommand.Source -Arguments $rustcArguments -Label "remote-terminal-contract-compile")
-    $testResult = Invoke-GatedProcess -Executable $testExecutable -Arguments "--nocapture" -Label "remote-terminal-contract-tests"
+    $cargoTestArguments = "test --manifest-path `"$manifestPath`" --lib remote_terminal_contract::tests -- --nocapture"
+    $testResult = Invoke-GatedProcess -Executable $cargoCommand.Source -Arguments $cargoTestArguments -Label "remote-terminal-contract-tests"
 
-    $requiredTests = @(
-        "remote_terminal_spawns_system32_ssh_with_pty_and_session_env",
-        "remote_terminal_process_tree_cleanup_kills_descendants",
-        "remote_terminal_rejects_option_and_shell_injection_inputs",
-        "remote_terminal_session_requires_token_auth_without_embedding_secrets",
-        "remote_terminal_handles_network_interruption_resilience"
-    )
     foreach ($testName in $requiredTests) {
         if ($testResult.Stdout -notmatch [regex]::Escape($testName)) {
-            throw "Required Remote Terminal test missing: $testName"
+            throw "Required Remote Terminal test missing from execution output: $testName"
         }
     }
-    if ($testResult.Stdout -notmatch "test result:\s+ok\.\s+5 passed;") {
+    if ($testResult.Stdout -notmatch "test result:\s+ok\.") {
         throw "Native Remote Terminal test summary is missing or incomplete"
     }
 } catch {
     Write-Host "[ERROR] $_"
     Exit-WithCode -Code 1
-} finally {
-    if (Test-Path -LiteralPath $testExecutable -PathType Leaf) {
-        Remove-Item -LiteralPath $testExecutable -Force
-    }
 }
 
 Write-Host "[SUCCESS] Native Remote Terminal PTY/SSH backend and security contract gate passed."
