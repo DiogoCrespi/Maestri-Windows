@@ -605,7 +605,8 @@ mod tests {
 
         run_git_cmd(&repo_path, &["init", "-b", "main"]).unwrap_or_else(|_| {
             run_git_cmd(&repo_path, &["init"]).expect("Failed to init git repo");
-            run_git_cmd(&repo_path, &["checkout", "-b", "main"]).expect("Failed to set main branch");
+            run_git_cmd(&repo_path, &["checkout", "-b", "main"])
+                .expect("Failed to set main branch")
         });
 
         run_git_cmd(&repo_path, &["config", "user.name", "Test User"]).unwrap();
@@ -861,7 +862,7 @@ mod tests {
         assert!(main_file.exists());
         assert_eq!(fs::read_to_string(main_file).unwrap(), "New feature work\n");
 
-        assert!(floor_land(root_str.clone(), floor.clone(), "other-target").is_err());
+        assert!(floor_land(root_str.clone(), floor.clone(), "other-target".to_string()).is_err());
 
         let dirty_file = floor_wt.join("dirty.txt");
         fs::write(&dirty_file, "uncommitted change").unwrap();

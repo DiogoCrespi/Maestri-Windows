@@ -52,13 +52,11 @@ mod tests {
 
         #[cfg(windows)]
         {
+            let app = tauri::test::mock_app();
             // Spawn Session 1 (Manager terminal) with real ConPTY
-            let mgr_info = crate::terminal::terminal_create(
-                tauri::test::mock_app().handle().clone(),
-                tauri::State::respond_with({
-                    let r = registry.clone();
-                    move || r.clone()
-                }),
+            let mgr_info = crate::terminal::terminal_create_for_test(
+                app.handle().clone(),
+                &registry,
                 "manager-term-1".to_string(),
                 80,
                 24,
@@ -76,12 +74,9 @@ mod tests {
             assert_eq!(mgr_info.state, "running");
 
             // Spawn Session 2 (Worker terminal) with real ConPTY
-            let wrk_info = crate::terminal::terminal_create(
-                tauri::test::mock_app().handle().clone(),
-                tauri::State::respond_with({
-                    let r = registry.clone();
-                    move || r.clone()
-                }),
+            let wrk_info = crate::terminal::terminal_create_for_test(
+                app.handle().clone(),
+                &registry,
                 "worker-term-1".to_string(),
                 80,
                 24,
@@ -142,11 +137,8 @@ mod tests {
             assert!(wrk_matched, "Worker ConPTY output must contain dynamically evaluated stdout 'WRK_EVAL_99' (not input echo)");
 
             // Resize Test
-            let resized_mgr = crate::terminal::terminal_resize(
-                tauri::State::respond_with({
-                    let r = registry.clone();
-                    move || r.clone()
-                }),
+            let resized_mgr = crate::terminal::terminal_resize_for_test(
+                &registry,
                 "manager-term-1".to_string(),
                 120,
                 40,
@@ -155,11 +147,8 @@ mod tests {
             assert_eq!(resized_mgr.cols, 120);
             assert_eq!(resized_mgr.rows, 40);
 
-            let resized_wrk = crate::terminal::terminal_resize(
-                tauri::State::respond_with({
-                    let r = registry.clone();
-                    move || r.clone()
-                }),
+            let resized_wrk = crate::terminal::terminal_resize_for_test(
+                &registry,
                 "worker-term-1".to_string(),
                 100,
                 30,
@@ -190,13 +179,11 @@ mod tests {
 
         #[cfg(windows)]
         {
+            let app = tauri::test::mock_app();
             // Spawn Session A
-            let _mgr_info = crate::terminal::terminal_create(
-                tauri::test::mock_app().handle().clone(),
-                tauri::State::respond_with({
-                    let r = registry.clone();
-                    move || r.clone()
-                }),
+            let _mgr_info = crate::terminal::terminal_create_for_test(
+                app.handle().clone(),
+                &registry,
                 "session-a".to_string(),
                 80,
                 24,
@@ -209,12 +196,9 @@ mod tests {
             .expect("Failed to create session-a");
 
             // Spawn Session B
-            let _wrk_info = crate::terminal::terminal_create(
-                tauri::test::mock_app().handle().clone(),
-                tauri::State::respond_with({
-                    let r = registry.clone();
-                    move || r.clone()
-                }),
+            let _wrk_info = crate::terminal::terminal_create_for_test(
+                app.handle().clone(),
+                &registry,
                 "session-b".to_string(),
                 80,
                 24,

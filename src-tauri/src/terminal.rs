@@ -14,7 +14,7 @@ use std::thread;
 
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 const DEFAULT_SHELL: &str = "powershell.exe";
 const MAX_ID_BYTES: usize = 256;
@@ -751,8 +751,8 @@ fn prepend_path_entry(entry: &Path, current_path: Option<&OsStr>) -> Option<OsSt
     std::env::join_paths(entries).ok()
 }
 
-fn start_threads(
-    app: AppHandle,
+fn start_threads<R: Runtime>(
+    app: AppHandle<R>,
     registry: Weak<RwLock<HashMap<String, Arc<TerminalSession>>>>,
     session: Arc<TerminalSession>,
     mut reader: Box<dyn Read + Send>,
@@ -876,11 +876,9 @@ fn start_threads(
     Ok(())
 }
 
-/// Creates and starts a ConPTY-backed session.
-#[tauri::command]
-pub fn terminal_create(
-    app: AppHandle,
-    registry: State<'_, TerminalRegistry>,
+fn terminal_create_with_registry<R: Runtime>(
+    app: AppHandle<R>,
+    registry: &TerminalRegistry,
     id: String,
     cols: u16,
     rows: u16,
@@ -970,6 +968,52 @@ pub fn terminal_create(
     session.info()
 }
 
+/// Creates and starts a ConPTY-backed session.
+#[tauri::command]
+pub fn terminal_create(
+    app: AppHandle,
+    registry: State<'_, TerminalRegistry>,
+    id: String,
+    cols: u16,
+    rows: u16,
+    cwd: Option<String>,
+    shell: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+    command: Option<String>,
+) -> Result<TerminalInfo, String> {
+    terminal_create_with_registry(
+        app,
+        &registry,
+        id,
+        cols,
+        rows,
+        cwd,
+        shell,
+        args,
+        env,
+        command,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn terminal_create_for_test<R: Runtime>(
+    app: AppHandle<R>,
+    registry: &TerminalRegistry,
+    id: String,
+    cols: u16,
+    rows: u16,
+    cwd: Option<String>,
+    shell: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+    command: Option<String>,
+) -> Result<TerminalInfo, String> {
+    terminal_create_with_registry(
+        app, registry, id, cols, rows, cwd, shell, args, env, command,
+    )
+}
+
 #[tauri::command]
 pub fn terminal_write(
     registry: State<'_, TerminalRegistry>,
@@ -983,6 +1027,19 @@ pub fn terminal_write(
 #[tauri::command]
 pub fn terminal_resize(
     registry: State<'_, TerminalRegistry>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<TerminalInfo, String> {
+    validate_id(&id)?;
+    let session = registry.get(&id)?;
+    session.resize(cols, rows)?;
+    session.info()
+}
+
+#[cfg(test)]
+pub(crate) fn terminal_resize_for_test(
+    registry: &TerminalRegistry,
     id: String,
     cols: u16,
     rows: u16,
