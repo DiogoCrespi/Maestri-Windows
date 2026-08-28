@@ -136,6 +136,10 @@ impl Default for NodeType {
 pub struct GraphNode {
     pub id: NodeId,
     pub name: String,
+    /// Alternate stable identities accepted by the IPC resolver, such as the
+    /// React Flow node ID and a legacy/persisted content ID. Aliases are not
+    /// display names and therefore do not need to be globally unique.
+    pub aliases: Vec<String>,
     pub node_type: NodeType,
     pub is_manager: bool,
     /// A note's authorized filesystem resource. This is deliberately not an
@@ -168,14 +172,34 @@ impl GraphNode {
         resource_path: Option<String>,
         is_manager: bool,
     ) -> Result<Self> {
+        Self::new_with_aliases_type_resource_and_manager(
+            id,
+            name,
+            Vec::new(),
+            node_type,
+            resource_path,
+            is_manager,
+        )
+    }
+
+    pub fn new_with_aliases_type_resource_and_manager(
+        id: NodeId,
+        name: impl Into<String>,
+        aliases: Vec<String>,
+        node_type: NodeType,
+        resource_path: Option<String>,
+        is_manager: bool,
+    ) -> Result<Self> {
         let name = name.into().trim().to_owned();
         if name.is_empty() {
             return Err(AccessGraphError::EmptyNodeName);
         }
         validate_resource_path(node_type, resource_path.as_deref())?;
+        let aliases = normalize_aliases(aliases)?;
         Ok(Self {
             id,
             name,
+            aliases,
             node_type,
             is_manager,
             resource_path,
@@ -258,6 +282,8 @@ pub struct GraphNodeInput {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
     pub node_type: NodeType,
     #[serde(default)]
     pub is_manager: bool,
@@ -291,9 +317,10 @@ pub fn access_graph_replace(
         .into_iter()
         .map(|node| {
             let id = NodeId::new(&node.id).map_err(|error| error.to_string())?;
-            GraphNode::new_with_type_and_resource_and_manager(
+            GraphNode::new_with_aliases_type_resource_and_manager(
                 id,
                 node.name,
+                node.aliases,
                 node.node_type,
                 node.resource_path,
                 node.is_manager,
@@ -453,7 +480,7 @@ impl AccessGraph {
     pub fn authorize(&self, source: &str, action: AccessAction, target: &str) -> Result<GraphNode> {
         let state = self.read_state()?;
         let source = resolve_in(&state, source)?;
-        let target_id = resolve_in(&state, target)?;
+        let target_id = resolve_authorized_target_in(&state, &source, target)?;
         let edge = Connection::new(source, target_id.clone())
             .map_err(|_| AccessGraphError::ConnectionNotFound)?;
         if !state.connections.contains(&edge) {
@@ -557,7 +584,24 @@ fn validate_node(node: &GraphNode) -> Result<()> {
     if node.name.trim().is_empty() {
         return Err(AccessGraphError::EmptyNodeName);
     }
+    normalize_aliases(node.aliases.clone())?;
     validate_resource_path(node.node_type, node.resource_path.as_deref())
+}
+
+fn normalize_aliases(aliases: Vec<String>) -> Result<Vec<String>> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for alias in aliases {
+        let alias = alias.trim();
+        if alias.is_empty() || alias.chars().any(char::is_control) {
+            return Err(AccessGraphError::InvalidReference(alias.to_owned()));
+        }
+        let key = alias.to_lowercase();
+        if seen.insert(key) {
+            normalized.push(alias.to_owned());
+        }
+    }
+    Ok(normalized)
 }
 
 fn validate_resource_path(node_type: NodeType, resource_path: Option<&str>) -> Result<()> {
@@ -578,18 +622,77 @@ fn resolve_in(state: &GraphState, reference: &str) -> Result<NodeId> {
     if reference.is_empty() {
         return Err(AccessGraphError::InvalidReference(reference.to_owned()));
     }
-    if is_uuid(reference) {
-        let id = NodeId(reference.to_ascii_lowercase());
-        return if state.nodes.contains_key(&id) {
-            Ok(id)
-        } else {
-            Err(AccessGraphError::NodeNotFound(reference.to_owned()))
-        };
+    if let Some(id) = resolve_identity_in(state, reference)? {
+        return Ok(id);
     }
-    let normalized = reference.to_lowercase();
+    resolve_name_in(state.nodes.values(), reference)
+}
+
+/// Identity references (canonical UUID or alias) always identify the same
+/// node globally and are checked against the edge afterwards. Display names
+/// are resolved only among the caller's direct neighbors, so an unrelated
+/// node with the same label cannot make a valid connection ambiguous.
+fn resolve_authorized_target_in(
+    state: &GraphState,
+    source: &NodeId,
+    reference: &str,
+) -> Result<NodeId> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return Err(AccessGraphError::InvalidReference(reference.to_owned()));
+    }
+    if let Some(id) = resolve_identity_in(state, reference)? {
+        return Ok(id);
+    }
+    let neighbors: HashSet<NodeId> = state
+        .connections
+        .iter()
+        .filter_map(|connection| connection.other(source))
+        .cloned()
+        .collect();
+    resolve_name_in(
+        state
+            .nodes
+            .values()
+            .filter(|node| neighbors.contains(&node.id)),
+        reference,
+    )
+}
+
+/// Resolves an exact canonical ID or alias before considering display names.
+/// This lets UUID-shaped React Flow IDs work as aliases without weakening the
+/// canonical UUID identity used for authorization and terminal lookup.
+fn resolve_identity_in(state: &GraphState, reference: &str) -> Result<Option<NodeId>> {
+    let normalized = reference.trim().to_lowercase();
+    if is_uuid(&normalized) {
+        let id = NodeId(normalized.clone());
+        if state.nodes.contains_key(&id) {
+            return Ok(Some(id));
+        }
+    }
     let matches: Vec<_> = state
         .nodes
         .values()
+        .filter(|node| {
+            node.aliases
+                .iter()
+                .any(|alias| alias.to_lowercase() == normalized)
+        })
+        .map(|node| node.id.clone())
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [id] => Ok(Some(id.clone())),
+        _ => Err(AccessGraphError::AmbiguousName(reference.trim().to_owned())),
+    }
+}
+
+fn resolve_name_in<'a>(
+    nodes: impl Iterator<Item = &'a GraphNode>,
+    reference: &str,
+) -> Result<NodeId> {
+    let normalized = reference.trim().to_lowercase();
+    let matches: Vec<_> = nodes
         .filter(|node| node.name.to_lowercase() == normalized)
         .map(|node| node.id.clone())
         .collect();
@@ -624,6 +727,18 @@ mod tests {
         GraphNode::new(id(number), name).unwrap()
     }
 
+    fn aliased_node(number: u64, name: &str, aliases: &[&str]) -> GraphNode {
+        GraphNode::new_with_aliases_type_resource_and_manager(
+            id(number),
+            name,
+            aliases.iter().map(|alias| (*alias).to_owned()).collect(),
+            NodeType::Terminal,
+            None,
+            false,
+        )
+        .unwrap()
+    }
+
     fn note(number: u64, name: &str, path: &str) -> GraphNode {
         GraphNode::new_with_type_and_resource(
             id(number),
@@ -655,6 +770,64 @@ mod tests {
                 .unwrap()
                 .id,
             id(2)
+        );
+    }
+
+    #[test]
+    fn resolves_react_flow_and_content_aliases_including_uuid_shaped_aliases() {
+        let graph = AccessGraph::new();
+        let react_flow_uuid = "00000000-0000-0000-0000-000000000099";
+        graph
+            .upsert_node(aliased_node(1, "Source", &["react-source"]))
+            .unwrap();
+        graph
+            .upsert_node(aliased_node(
+                2,
+                "Worker",
+                &[react_flow_uuid, "legacy-content-id"],
+            ))
+            .unwrap();
+
+        graph.connect("react-source", react_flow_uuid).unwrap();
+        assert_eq!(graph.resolve(react_flow_uuid).unwrap().id, id(2));
+        assert_eq!(graph.resolve("LEGACY-CONTENT-ID").unwrap().id, id(2));
+        assert!(graph
+            .authorize("react-source", AccessAction::Ask, react_flow_uuid)
+            .is_ok());
+    }
+
+    #[test]
+    fn duplicate_names_are_resolved_within_direct_connections_only() {
+        let graph = AccessGraph::new();
+        graph.upsert_node(node(1, "Source")).unwrap();
+        graph
+            .upsert_node(aliased_node(2, "Antigravity CLI", &["rf-worker-a"]))
+            .unwrap();
+        graph
+            .upsert_node(aliased_node(3, "Antigravity CLI", &["rf-worker-b"]))
+            .unwrap();
+        graph.connect(id(1).as_str(), id(2).as_str()).unwrap();
+
+        let connected = graph
+            .authorize("Source", AccessAction::Ask, "Antigravity CLI")
+            .unwrap();
+        assert_eq!(connected.id, id(2));
+        assert_eq!(
+            graph.authorize("Source", AccessAction::Ask, "rf-worker-b"),
+            Err(AccessGraphError::ConnectionNotFound)
+        );
+
+        graph.connect(id(1).as_str(), id(3).as_str()).unwrap();
+        assert_eq!(
+            graph.authorize("Source", AccessAction::Ask, "Antigravity CLI"),
+            Err(AccessGraphError::AmbiguousName("Antigravity CLI".into()))
+        );
+        assert_eq!(
+            graph
+                .authorize("Source", AccessAction::Ask, "rf-worker-b")
+                .unwrap()
+                .id,
+            id(3)
         );
     }
 
@@ -878,6 +1051,7 @@ mod tests {
         )
         .unwrap();
         assert!(!input.is_manager);
+        assert!(input.aliases.is_empty());
     }
 
     #[test]

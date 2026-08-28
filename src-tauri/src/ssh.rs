@@ -3,6 +3,7 @@ use std::env;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -67,10 +68,39 @@ struct ActiveTunnel {
 #[derive(Default)]
 pub struct SshManager {
     active: Mutex<Option<ActiveTunnel>>,
+    generation: AtomicU64,
 }
 
 impl SshManager {
+    fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    fn bump_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn prepare_connect(&self) -> Result<u64, String> {
+        let mut guard = self
+            .active
+            .lock()
+            .map_err(|_| "SSH tunnel state is unavailable".to_owned())?;
+        if let Some(active) = guard.as_mut() {
+            if active
+                .child
+                .try_wait()
+                .map_err(|e| format!("cannot inspect SSH tunnel: {e}"))?
+                .is_none()
+            {
+                return Err("an SSH tunnel is already connected; disconnect it first".to_owned());
+            }
+            *guard = None;
+        }
+        Ok(self.bump_generation())
+    }
+
     pub fn disconnect(&self) -> Result<(), String> {
+        self.bump_generation();
         let mut guard = self
             .active
             .lock()
@@ -129,7 +159,7 @@ impl SshManager {
     }
 }
 
-fn resolve_ssh_executable() -> Result<PathBuf, String> {
+pub(crate) fn resolve_ssh_executable() -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
         let windows_dir = env::var_os("WINDIR")
@@ -314,21 +344,8 @@ pub fn ssh_connect(manager: State<'_, SshManager>, config: SshConfig) -> Result<
     ssh_contract::validate_config(&contract)?;
     let local_port = local_ipc_port()?;
     let executable = resolve_ssh_executable()?;
-    let mut guard = manager
-        .active
-        .lock()
-        .map_err(|_| "SSH tunnel state is unavailable".to_owned())?;
-    if let Some(active) = guard.as_mut() {
-        if active
-            .child
-            .try_wait()
-            .map_err(|e| format!("cannot inspect SSH tunnel: {e}"))?
-            .is_none()
-        {
-            return Err("an SSH tunnel is already connected; disconnect it first".to_owned());
-        }
-        *guard = None;
-    }
+
+    let my_generation = manager.prepare_connect()?;
 
     let mut child = Command::new(executable)
         .args(ssh_contract::tunnel_arguments(&contract, local_port))
@@ -337,7 +354,43 @@ pub fn ssh_connect(manager: State<'_, SshManager>, config: SshConfig) -> Result<
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("cannot start SSH tunnel: {error}"))?;
-    await_tunnel_ready(&mut child)?;
+
+    if let Err(err) = await_tunnel_ready(&mut child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(err);
+    }
+
+    let mut guard = match manager.active.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("SSH tunnel state is unavailable".to_owned());
+        }
+    };
+
+    if manager.current_generation() != my_generation {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("SSH tunnel connection was cancelled or superseded by another request".to_owned());
+    }
+
+    if let Some(active) = guard.as_mut() {
+        let is_running = match active.child.try_wait() {
+            Ok(None) => true,
+            _ => false,
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        if is_running {
+            return Err("an SSH tunnel was connected concurrently by another request; disconnect it first".to_owned());
+        } else {
+            *guard = None;
+            return Err("SSH tunnel connection was invalidated during startup".to_owned());
+        }
+    }
+
     let status = SshStatus {
         state: "connected".to_owned(),
         host: Some(config.host.clone()),
@@ -352,11 +405,9 @@ pub fn ssh_connect(manager: State<'_, SshManager>, config: SshConfig) -> Result<
 #[tauri::command]
 pub fn ssh_disconnect(
     manager: State<'_, SshManager>,
-    terminals: Option<State<'_, crate::terminal::TerminalRegistry>>,
+    terminals: State<'_, crate::terminal::TerminalRegistry>,
 ) -> Result<SshStatus, String> {
-    if let Some(registry) = terminals {
-        registry.stop_remote_all();
-    }
+    terminals.stop_remote_all();
     manager.disconnect()?;
     Ok(SshStatus::disconnected(None))
 }
@@ -364,4 +415,41 @@ pub fn ssh_disconnect(
 #[tauri::command]
 pub fn ssh_status(manager: State<'_, SshManager>) -> Result<SshStatus, String> {
     manager.status()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ssh_manager_initial_state_disconnected() {
+        let manager = SshManager::default();
+        let status = manager.status().unwrap();
+        assert_eq!(status.state, "disconnected");
+        assert!(manager.active_config().is_none());
+        assert_eq!(manager.current_generation(), 0);
+    }
+
+    #[test]
+    fn test_ssh_disconnect_bumps_generation_and_clears_active_state() {
+        let manager = SshManager::default();
+        let gen1 = manager.prepare_connect().unwrap();
+        assert_eq!(gen1, 1);
+        assert_eq!(manager.current_generation(), 1);
+
+        assert!(manager.disconnect().is_ok());
+        assert_eq!(manager.current_generation(), 2);
+        let status = manager.status().unwrap();
+        assert_eq!(status.state, "disconnected");
+    }
+
+    #[test]
+    fn test_generation_invalidation_detects_cancellation() {
+        let manager = SshManager::default();
+        let gen1 = manager.prepare_connect().unwrap();
+        assert_eq!(gen1, 1);
+
+        manager.disconnect().unwrap();
+        assert_ne!(manager.current_generation(), gen1);
+    }
 }

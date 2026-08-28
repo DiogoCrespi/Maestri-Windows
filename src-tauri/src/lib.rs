@@ -19,6 +19,7 @@ mod remote_terminal_contract;
 mod terminal;
 mod workspace;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -31,6 +32,81 @@ use tauri::{AppHandle, Emitter, Listener, Manager, RunEvent};
 use terminal::TerminalRegistry;
 
 const APP_READY_EVENT: &str = "app://ready";
+const AGENT_REPLY_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MAX_PENDING_AGENT_REQUESTS: usize = 128;
+
+struct PendingAgentRequest {
+    target_terminal_id: String,
+    sender: mpsc::Sender<String>,
+}
+
+#[derive(Clone, Default)]
+struct AgentRequestBroker {
+    pending: Arc<Mutex<HashMap<String, PendingAgentRequest>>>,
+}
+
+impl AgentRequestBroker {
+    fn register(&self, target_terminal_id: &str) -> Result<(String, mpsc::Receiver<String>), String> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| "agent request broker is unavailable".to_string())?;
+        if pending.len() >= MAX_PENDING_AGENT_REQUESTS {
+            return Err("too many pending inter-agent requests".to_string());
+        }
+        let request_id = loop {
+            let candidate = maestro::new_request_id();
+            if !pending.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        let (sender, receiver) = mpsc::channel();
+        pending.insert(
+            request_id.clone(),
+            PendingAgentRequest {
+                target_terminal_id: target_terminal_id.to_owned(),
+                sender,
+            },
+        );
+        Ok((request_id, receiver))
+    }
+
+    fn cancel(&self, request_id: &str) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(request_id);
+        }
+    }
+
+    fn reply(
+        &self,
+        replying_terminal_id: &str,
+        request_id: &str,
+        response: &str,
+    ) -> Result<(), String> {
+        if response.trim().is_empty() {
+            return Err("agent response must not be empty".to_string());
+        }
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| "agent request broker is unavailable".to_string())?;
+        let expected_target = pending
+            .get(request_id)
+            .ok_or_else(|| format!("unknown or expired request '{request_id}'"))?
+            .target_terminal_id
+            .clone();
+        if !expected_target.eq_ignore_ascii_case(replying_terminal_id) {
+            return Err("only the requested target terminal may reply to this request".to_string());
+        }
+        let request = pending
+            .remove(request_id)
+            .ok_or_else(|| format!("unknown or expired request '{request_id}'"))?;
+        request
+            .sender
+            .send(response.to_owned())
+            .map_err(|_| "requesting terminal is no longer waiting for the response".to_string())
+    }
+}
 
 pub struct AppState {
     terminal: TerminalRegistry,
@@ -66,19 +142,17 @@ struct TerminalIpcBackend {
     portals: portal::PortalRegistry,
     routine_runtime: Arc<routine_runtime::RoutineRuntime>,
     maestro: MaestroBridge,
+    agent_requests: AgentRequestBroker,
 }
 
 impl TerminalIpcBackend {
     fn validate_origin(&self, terminal_id: &str) -> Result<(), String> {
-        self.terminals
-            .recent_output(terminal_id)
-            .map(|_| ())
-            .map_err(|_| "error: unknown source terminal".to_string())?;
+        let exists_in_registry = self.terminals.get(terminal_id).is_ok();
         let node = self
             .access_graph
             .resolve(terminal_id)
             .map_err(|_| "error: unknown source terminal".to_string())?;
-        if node.node_type != NodeType::Terminal {
+        if node.node_type != NodeType::Terminal && !exists_in_registry {
             return Err("error: source must be a terminal".to_string());
         }
         Ok(())
@@ -97,6 +171,9 @@ impl TerminalIpcBackend {
                 access_graph::AccessGraphError::TargetTypeNotAllowed { .. } => {
                     format!("error: {error}")
                 }
+                access_graph::AccessGraphError::AmbiguousName(_) => format!(
+                    "error: agent '{agent}' is ambiguous in this terminal's connections; use its UUID or ReactFlow node ID"
+                ),
                 _ => format!("error: agent '{agent}' not found in connections"),
             })
     }
@@ -211,10 +288,40 @@ impl IpcBackend for TerminalIpcBackend {
             Ok(target) => target,
             Err(error) => return error,
         };
-        let line = format!("{prompt}\r");
-        match self.terminals.write_to(target.id.as_str(), &line) {
-            Ok(()) => format!("sent to {agent}"),
-            Err(_) => format!("error: terminal '{agent}' not found"),
+        let (request_id, receiver) = match self.agent_requests.register(target.id.as_str()) {
+            Ok(request) => request,
+            Err(error) => return format!("error: cannot create inter-agent request: {error}"),
+        };
+        let line = format!(
+            "{prompt} [Maestri request {request_id}: ao concluir, devolva a resposta diretamente ao terminal solicitante executando omaestri reply \"{request_id}\" \"<resposta final>\"; substitua o placeholder pela resposta real e não use workspace.json ou arquivos .maestri como canal de resposta.]\r"
+        );
+        if self.terminals.write_to(target.id.as_str(), &line).is_err() {
+            self.agent_requests.cancel(&request_id);
+            return format!("error: terminal '{agent}' not found");
+        }
+        match receiver.recv_timeout(AGENT_REPLY_TIMEOUT) {
+            Ok(response) => response,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.agent_requests.cancel(&request_id);
+                format!(
+                    "error: agent '{agent}' did not reply within {} seconds (request {request_id})",
+                    AGENT_REPLY_TIMEOUT.as_secs()
+                )
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.agent_requests.cancel(&request_id);
+                format!("error: response channel for request '{request_id}' was closed")
+            }
+        }
+    }
+
+    fn reply(&self, terminal_id: &str, request_id: &str, response: &str) -> String {
+        if let Err(error) = self.validate_origin(terminal_id) {
+            return error;
+        }
+        match self.agent_requests.reply(terminal_id, request_id, response) {
+            Ok(()) => format!("response delivered for request {request_id}"),
+            Err(error) => format!("error: {error}"),
         }
     }
 
@@ -526,6 +633,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_request_broker_delivers_only_the_expected_targets_reply() {
+        let broker = AgentRequestBroker::default();
+        let (request_id, receiver) = broker.register("target-terminal").unwrap();
+
+        assert!(broker
+            .reply("different-terminal", &request_id, "spoofed")
+            .is_err());
+        broker
+            .reply("TARGET-TERMINAL", &request_id, "completed")
+            .unwrap();
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(50)).unwrap(),
+            "completed"
+        );
+        assert!(broker
+            .reply("target-terminal", &request_id, "duplicate")
+            .is_err());
+    }
+
+    #[test]
+    fn cancelling_agent_request_disconnects_the_waiter() {
+        let broker = AgentRequestBroker::default();
+        let (request_id, receiver) = broker.register("target-terminal").unwrap();
+        broker.cancel(&request_id);
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        );
+    }
+
+    #[test]
     fn note_path_is_taken_from_resource_metadata_not_node_identity() {
         let node = GraphNode::new_with_type_and_resource(
             access_graph::NodeId::new("00000000-0000-0000-0000-000000000001").unwrap(),
@@ -762,6 +900,7 @@ pub fn run() {
                 portals: portal.clone(),
                 routine_runtime: routine_runtime.clone(),
                 maestro,
+                agent_requests: AgentRequestBroker::default(),
             });
             let server = IpcServer::bind_loopback(backend)?.start()?;
             let endpoint = server.local_addr().to_string();
@@ -907,6 +1046,10 @@ pub fn run() {
             floors::floor_run_hooks,
             floors::floor_preview_land,
             floors::floor_land,
+            notes::note_read_scoped,
+            notes::note_save_scoped,
+            notes::note_read,
+            notes::note_save,
             ssh::ssh_probe,
             ssh::ssh_install,
             ssh::ssh_connect,

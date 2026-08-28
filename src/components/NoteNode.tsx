@@ -8,6 +8,9 @@ type NoteContentData = Partial<StickyNoteContent> & {
   title?: string;
   text?: string;
   path?: string | null;
+  workspaceRoot?: string | null;
+  resourcePath?: string | null;
+  isCustom?: boolean;
 };
 
 export interface NoteNodeData {
@@ -16,6 +19,9 @@ export interface NoteNodeData {
   text?: string;
   fileName?: string | null;
   path?: string | null;
+  workspaceRoot?: string | null;
+  resourcePath?: string | null;
+  isCustom?: boolean;
   color?: string;
   onChangeContent?: (updatedText: string, updatedTitle?: string) => void;
   onClose?: () => void;
@@ -48,22 +54,20 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
   const initialTitle = nodeData?.title ?? nodeData?.content?.title ?? "Sticky Note";
   const initialText = nodeData?.text ?? nodeData?.content?.text ?? "";
   const noteColor = nodeData?.color ?? nodeData?.content?.color ?? "#fef08a";
-  // CanvasWorkspace deliberately injects `path: null` while the workspace
-  // has no confirmed disk location. Do not fall back to a relative file name
-  // in that case, otherwise a new in-memory note could be written into the
-  // application's current working directory.
-  const hasExplicitContentPath = Boolean(
-    nodeData?.content && Object.prototype.hasOwnProperty.call(nodeData.content, "path"),
-  );
-  const notePathCandidate = hasExplicitContentPath
-    ? nodeData.content?.path
-    : nodeData?.path ?? nodeData?.content?.fileName ?? nodeData?.fileName ?? null;
-  const notePath = notePathCandidate?.trim() || null;
+
+  const workspaceRoot = nodeData?.workspaceRoot ?? nodeData?.content?.workspaceRoot ?? null;
+  const resourcePathCandidate = nodeData?.resourcePath ?? nodeData?.content?.resourcePath ?? nodeData?.content?.fileName ?? nodeData?.fileName ?? null;
+  const resourcePath = resourcePathCandidate?.trim() || null;
+  const isCustom = Boolean(nodeData?.isCustom ?? nodeData?.content?.isCustom);
 
   const [title, setTitle] = useState(initialTitle);
   const [text, setText] = useState(initialText);
-  const [syncStatus, setSyncStatus] = useState<NoteSyncStatus>(notePath ? "loading" : "memory");
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<NoteSyncStatus>(
+    isCustom ? "error" : workspaceRoot && resourcePath ? "loading" : "memory",
+  );
+  const [syncError, setSyncError] = useState<string | null>(
+    isCustom ? "Notas customizadas com caminhos absolutos estão desabilitadas por segurança." : null,
+  );
 
   const textRef = useRef(initialText);
   const titleRef = useRef(initialTitle);
@@ -72,7 +76,7 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
   const pathGenerationRef = useRef(0);
   const editVersionRef = useRef(0);
   const dirtyRef = useRef(false);
-  const loadingRef = useRef(Boolean(notePath));
+  const loadingRef = useRef(Boolean(!isCustom && workspaceRoot && resourcePath));
   const mountedRef = useRef(true);
 
   onChangeContentRef.current = nodeData.onChangeContent;
@@ -82,13 +86,18 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
   useEffect(() => setTitle(initialTitle), [initialTitle]);
 
   useEffect(() => {
-    if (notePath) return;
+    if (workspaceRoot && resourcePath && !isCustom) return;
     dirtyRef.current = false;
     textRef.current = initialText;
     setText(initialText);
-    setSyncError(null);
-    setSyncStatus("memory");
-  }, [initialText, notePath]);
+    if (isCustom) {
+      setSyncError("Notas customizadas com caminhos absolutos estão desabilitadas por segurança.");
+      setSyncStatus("error");
+    } else {
+      setSyncError(null);
+      setSyncStatus("memory");
+    }
+  }, [initialText, workspaceRoot, resourcePath, isCustom]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -102,20 +111,29 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
     pathGenerationRef.current = generation;
     dirtyRef.current = false;
     editVersionRef.current += 1;
-    setSyncError(null);
     textRef.current = initialText;
     setText(initialText);
 
-    if (!notePath) {
+    if (isCustom) {
       loadingRef.current = false;
+      setSyncError("Notas customizadas com caminhos absolutos estão desabilitadas por segurança.");
+      setSyncStatus("error");
+      return;
+    }
+
+    if (!workspaceRoot || !resourcePath) {
+      loadingRef.current = false;
+      setSyncError(null);
       setSyncStatus("memory");
       return;
     }
 
     loadingRef.current = true;
     setSyncStatus("loading");
+    setSyncError(null);
     let active = true;
-    void noteFiles.read(notePath).then(
+
+    void noteFiles.readScoped(workspaceRoot, resourcePath).then(
       (content) => {
         if (!active || !mountedRef.current || pathGenerationRef.current !== generation) return;
         loadingRef.current = false;
@@ -129,8 +147,23 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
       (error: unknown) => {
         if (!active || !mountedRef.current || pathGenerationRef.current !== generation) return;
         loadingRef.current = false;
-        const message = error instanceof Error ? error.message : String(error);
-        setSyncError(message);
+        const msg = error instanceof Error ? error.message : String(error);
+        const isNotFound =
+          (typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "not_found") ||
+          msg.includes("not found") ||
+          msg.includes("does not exist") ||
+          msg.includes("cannot canonicalize workspace root") ||
+          msg.includes("cannot canonicalize note directory") ||
+          msg.includes("Failed to read note");
+
+        if (isNotFound) {
+          // Se a pasta ou o arquivo da nota ainda nao existem no disco, trata como nota nova
+          dirtyRef.current = false;
+          setSyncError(null);
+          setSyncStatus("saved");
+          return;
+        }
+        setSyncError(msg);
         setSyncStatus("error");
       },
     );
@@ -138,10 +171,10 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
     return () => {
       active = false;
     };
-  }, [notePath]);
+  }, [workspaceRoot, resourcePath, isCustom]);
 
   useEffect(() => {
-    if (!notePath || loadingRef.current || !dirtyRef.current) return;
+    if (isCustom || !workspaceRoot || !resourcePath || loadingRef.current || !dirtyRef.current) return;
 
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     const generation = pathGenerationRef.current;
@@ -151,7 +184,7 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
 
     saveTimerRef.current = setTimeout(() => {
       setSyncStatus("saving");
-      void noteFiles.save(notePath, contentToSave).then(
+      void noteFiles.saveScoped(workspaceRoot, resourcePath, contentToSave).then(
         () => {
           if (
             !mountedRef.current ||
@@ -181,16 +214,20 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
         saveTimerRef.current = null;
       }
     };
-  }, [notePath, text]);
+  }, [workspaceRoot, resourcePath, isCustom, text]);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     editVersionRef.current += 1;
-    dirtyRef.current = Boolean(notePath);
+    dirtyRef.current = Boolean(!isCustom && workspaceRoot && resourcePath);
     textRef.current = val;
     setText(val);
-    setSyncError(null);
-    if (notePath) setSyncStatus("pending");
+    if (isCustom) {
+      setSyncStatus("error");
+    } else if (workspaceRoot && resourcePath) {
+      setSyncError(null);
+      setSyncStatus("pending");
+    }
     nodeData.onChangeContent?.(val, title);
   };
 
@@ -214,8 +251,15 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
         handleStyle={{ width: 8, height: 8, backgroundColor: "#ca8a04", borderRadius: 2 }}
       />
 
-      <Handle type="target" position={Position.Top} className="note-connection-handle" />
-      <Handle type="source" position={Position.Bottom} className="note-connection-handle" />
+      {/* Border connection handles on all 4 sides (invisible & expanded) */}
+      <Handle type="target" position={Position.Top} id="top-target" className="edge-handle edge-handle-top" />
+      <Handle type="source" position={Position.Top} id="top-source" className="edge-handle edge-handle-top" />
+      <Handle type="target" position={Position.Right} id="right-target" className="edge-handle edge-handle-right" />
+      <Handle type="source" position={Position.Right} id="right-source" className="edge-handle edge-handle-right" />
+      <Handle type="target" position={Position.Bottom} id="bottom-target" className="edge-handle edge-handle-bottom" />
+      <Handle type="source" position={Position.Bottom} id="bottom-source" className="edge-handle edge-handle-bottom" />
+      <Handle type="target" position={Position.Left} id="left-target" className="edge-handle edge-handle-left" />
+      <Handle type="source" position={Position.Left} id="left-source" className="edge-handle edge-handle-left" />
 
       {/* Note Header / Title Bar (Drag Handle) */}
       <div className="note-header drag-handle">
@@ -231,7 +275,7 @@ export const NoteNode: React.FC<NodeProps> = ({ selected, data }) => {
         <span
           className={`note-save-status note-save-status-${syncStatus}`}
           aria-live="polite"
-          title={syncError ?? (notePath ? `Arquivo: ${notePath}` : "Nota mantida em memória")}
+          title={syncError ?? (workspaceRoot && resourcePath ? `Recurso: notes/${resourcePath}` : "Nota mantida em memória")}
         >
           {statusLabel(syncStatus)}
         </span>

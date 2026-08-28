@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import React, { useEffect, useState } from "react";
 import { createPreferencesStore } from "../preferences/preferencesStore";
+import { BUILTIN_PRESETS } from "../preferences/preferences";
 import type { AgentRole, TerminalPreset } from "../preferences/preferences";
 import "./TerminalSettings.css";
 
@@ -59,6 +60,7 @@ export function isProtectedTerminalEnvKey(key: string): boolean {
 export interface TerminalSettingsProps {
   initialValues?: TerminalSettingsInitialValues;
   onApply: (value: TerminalSettingsValue) => void | Promise<void>;
+  onCancel?: () => void;
   loadShells?: ShellLoader;
   disabled?: boolean;
   title?: string;
@@ -151,6 +153,7 @@ export function parseArgsString(raw: string): string[] {
 export const TerminalSettings: React.FC<TerminalSettingsProps> = ({
   initialValues,
   onApply,
+  onCancel,
   loadShells = defaultLoadShells,
   disabled = false,
   title = "Configurações do terminal",
@@ -247,9 +250,14 @@ export const TerminalSettings: React.FC<TerminalSettingsProps> = ({
     const store = createPreferencesStore();
     const preset = store.getState().presets.find((p) => p.id === presetId);
     if (preset) {
+      if (!name || name.startsWith("Terminal ") || BUILTIN_PRESETS.some((p) => p.name === name)) {
+        setName(preset.name);
+      }
       setCommand(preset.command);
       if (preset.args && preset.args.length > 0) {
         setArgsStr(preset.args.join(" "));
+      } else {
+        setArgsStr("");
       }
       setSelectedAgentType(preset.agentType);
       setSelectedColor(preset.color);
@@ -286,20 +294,31 @@ export const TerminalSettings: React.FC<TerminalSettingsProps> = ({
           <legend id="terminal-settings-title">{title}</legend>
 
           <div className="terminal-settings-grid">
-            <label htmlFor="terminal-settings-preset">Preset</label>
-            <select
-              id="terminal-settings-preset"
-              name="preset"
-              value={selectedPresetId}
-              onChange={(e) => handlePresetSelect(e.target.value)}
-            >
-              <option value="">Selecione um preset (opcional)</option>
-              {preferences.presets.map((preset: TerminalPreset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.name} ({preset.agentType})
-                </option>
-              ))}
-            </select>
+            <label>Presets</label>
+            <div className="terminal-settings-presets-grid" role="radiogroup" aria-label="Presets rápidos">
+              {preferences.presets.map((preset: TerminalPreset) => {
+                const isSelected = selectedPresetId === preset.id;
+                const iconSymbol =
+                  preset.icon === "zap" || preset.agentType === "antGravity" ? "⚡" :
+                  preset.icon === "code" || preset.agentType === "codex" ? "💻" :
+                  preset.agentType === "claudeCode" ? "🤖" : "🐚";
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`terminal-preset-card ${isSelected ? "selected" : ""}`}
+                    onClick={() => handlePresetSelect(isSelected ? "" : preset.id)}
+                    title={`${preset.name} (${preset.command})`}
+                    style={{ borderColor: isSelected ? preset.color : undefined }}
+                  >
+                    <span className="terminal-preset-icon" style={{ backgroundColor: `${preset.color}22`, color: preset.color }}>
+                      {iconSymbol}
+                    </span>
+                    <span className="terminal-preset-name">{preset.name}</span>
+                  </button>
+                );
+              })}
+            </div>
 
             <label htmlFor="terminal-settings-role">Agent Role</label>
             <select
@@ -420,9 +439,21 @@ export const TerminalSettings: React.FC<TerminalSettingsProps> = ({
             <span className="terminal-settings-status" role="status" aria-live="polite">
               {loadingShells ? "Consultando shells…" : `${shells.length} shell${shells.length === 1 ? "" : "s"} disponível${shells.length === 1 ? "" : "eis"}`}
             </span>
-            <button type="submit" disabled={formDisabled || loadingShells || shells.length === 0}>
-              {applying ? "Aplicando…" : "Aplicar"}
-            </button>
+            <div style={{ display: "flex", gap: "6px" }}>
+              {onCancel && (
+                <button
+                  type="button"
+                  className="terminal-settings-cancel-btn"
+                  onClick={onCancel}
+                  disabled={applying}
+                >
+                  Cancelar
+                </button>
+              )}
+              <button type="submit" disabled={formDisabled || loadingShells || shells.length === 0}>
+                {applying ? "Aplicando…" : "Aplicar"}
+              </button>
+            </div>
           </div>
         </fieldset>
       </form>

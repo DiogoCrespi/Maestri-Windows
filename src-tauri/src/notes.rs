@@ -72,10 +72,15 @@ pub fn resolve_scoped_note_path(
     }
 
     let resource = validate_resource_path(resource_path)?;
+    let relative_resource = if let Ok(stripped) = resource.strip_prefix(NOTES_DIRECTORY) {
+        stripped.to_path_buf()
+    } else {
+        resource.clone()
+    };
     let candidate = if resource.is_absolute() {
         resource
     } else {
-        notes.join(resource)
+        notes.join(relative_resource)
     };
     // Do this lexical containment check before any directory creation. An
     // absolute path outside notes must never cause create_dir_all to touch it.
@@ -134,6 +139,7 @@ pub fn resolve_scoped_note_path(
 }
 
 /// Reads a note after enforcing the workspace-scoped filesystem policy.
+#[tauri::command]
 pub fn note_read_scoped(workspace_root: &str, resource_path: &str) -> Result<String, String> {
     let path = resolve_scoped_note_path(workspace_root, resource_path, false)?;
     let file = open_regular_file(&path)?;
@@ -161,6 +167,7 @@ pub fn note_read_scoped(workspace_root: &str, resource_path: &str) -> Result<Str
 }
 
 /// Atomically writes a note after enforcing the workspace-scoped filesystem policy.
+#[tauri::command]
 pub fn note_save_scoped(
     workspace_root: &str,
     resource_path: &str,

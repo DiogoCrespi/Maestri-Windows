@@ -1,4 +1,4 @@
-export type AgentType = "claudeCode" | "codex" | "genericShell";
+export type AgentType = "claudeCode" | "codex" | "antGravity" | "genericShell";
 
 export interface TerminalPreset {
   id: string;
@@ -138,8 +138,34 @@ export const BUILTIN_PRESETS: TerminalPreset[] = [
     updatedAt: "2026-01-01T00:00:00.000Z",
   },
   {
+    id: "preset-antgravity",
+    name: "Antigravity CLI",
+    agentType: "antGravity",
+    command: "agy",
+    args: [],
+    icon: "zap",
+    color: "#ec4899",
+    env: {},
+    isBuiltIn: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    id: "preset-opencode",
+    name: "OpenCode",
+    agentType: "genericShell",
+    command: "opencode",
+    args: [],
+    icon: "code",
+    color: "#f59e0b",
+    env: {},
+    isBuiltIn: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
     id: "preset-generic-shell",
-    name: "Generic PowerShell",
+    name: "Generic Shell",
     agentType: "genericShell",
     command: "powershell.exe",
     args: ["-NoLogo"],
@@ -275,7 +301,7 @@ export function validateImportedPreset(value: unknown, index = 0): { value?: Ter
     ...validateOptionalText(value.shellPath, `presets[${index}].shellPath`, PREFERENCES_LIMITS.shellPath),
     ...validateOptionalText(value.workingDirectory, `presets[${index}].workingDirectory`, PREFERENCES_LIMITS.workingDirectory),
   ];
-  if (!["claudeCode", "codex", "genericShell"].includes(String(value.agentType))) errors.push(`presets[${index}].agentType is invalid`);
+  if (!["claudeCode", "codex", "antGravity", "genericShell"].includes(String(value.agentType))) errors.push(`presets[${index}].agentType is invalid`);
   if (value.env !== undefined) errors.push(...validateEnvironment(value.env));
   if (errors.length > 0) return { errors };
   return {

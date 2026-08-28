@@ -4,6 +4,7 @@ import {
   toggleShowHidden,
   prepareFileDragData,
   updateFileTreeNodeViewMode,
+  formatTruncationMessage,
   FileEntryPayload,
 } from "./FileTreeNode";
 import { useWorkspaceStore } from "../store/workspaceStore";
@@ -115,5 +116,12 @@ describe("FileTreeNode exported helpers and workspace store integration", () => 
 
     expect(currentPath).toBe("C:\\Repo\\src");
     expect(history).toEqual(["C:\\Repo"]);
+  });
+
+  it("formatTruncationMessage formats truncation text correctly in PT-BR", () => {
+    expect(formatTruncationMessage(500, 1200)).toBe("Mostrando 500 de 1200 itens");
+    expect(formatTruncationMessage(500, 500)).toBe("Mostrando 500 de 500 itens");
+    // Garante tratamento seguro contra total menor que shown
+    expect(formatTruncationMessage(500, 300)).toBe("Mostrando 500 de 500 itens");
   });
 });

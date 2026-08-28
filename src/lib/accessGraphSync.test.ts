@@ -32,6 +32,7 @@ describe("access graph identity and synchronization", () => {
     const snapshot = buildAccessGraphSnapshot(nodes, [edge("react-node-1", "REACT-NODE-1")]);
 
     expect(snapshot.nodes[0]?.id).toBe(terminalUuid.toLowerCase());
+    expect(snapshot.nodes[0]?.aliases).toEqual(["react-node-1", terminalUuid]);
     expect(map.resolveReactFlowNodeId(terminalUuid.toLowerCase())).toBe("react-node-1");
     expect(map.resolveReactFlowNodeId(terminalUuid.toLowerCase())).toBe(map.resolveReactFlowNodeId(terminalUuid));
     expect(snapshot.connections).toEqual([{ a: terminalUuid.toLowerCase(), b: terminalUuid.toLowerCase() }]);
@@ -64,6 +65,35 @@ describe("access graph identity and synchronization", () => {
     expect(snapshot.connections).toEqual([{
       a: deterministicLegacyGraphId("content-a"),
       b: terminalUuid.toLowerCase(),
+    }]);
+  });
+
+  it("publishes a UUID-shaped ReactFlow ID as an alias of the content UUID", () => {
+    const reactFlowUuid = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB";
+    const nodes = [terminal(reactFlowUuid, terminalUuid, "Worker")];
+    const snapshot = buildAccessGraphSnapshot(nodes, []);
+
+    expect(snapshot.nodes).toEqual([{
+      id: terminalUuid.toLowerCase(),
+      name: "Worker",
+      aliases: [reactFlowUuid, terminalUuid],
+      nodeType: "terminal",
+      isManager: true,
+    }]);
+  });
+
+  it("does not let a colliding content alias hijack a ReactFlow edge endpoint", () => {
+    const nodes = [
+      terminal("rf-a", "rf-b", "First"),
+      terminal("rf-b", "content-b", "Second"),
+    ];
+    const map = buildGraphIdentityMap(nodes);
+    const snapshot = buildAccessGraphSnapshot(nodes, [edge("rf-a", "rf-b")]);
+
+    expect(map.resolveGraphId("rf-b")).toBe(deterministicLegacyGraphId("content-b"));
+    expect(snapshot.connections).toEqual([{
+      a: deterministicLegacyGraphId("rf-b"),
+      b: deterministicLegacyGraphId("content-b"),
     }]);
   });
 

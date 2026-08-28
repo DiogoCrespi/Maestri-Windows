@@ -420,7 +420,7 @@ impl RoutineRuntime {
                     }
 
                     let (lock, cvar) = &*shutdown_cv_arc;
-                    let mut guard = lock.lock().unwrap();
+                    let guard = lock.lock().unwrap();
                     if !*guard {
                         let _ = cvar.wait_timeout(guard, Duration::from_millis(interval));
                     }

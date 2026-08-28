@@ -829,6 +829,16 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
   }, [workspaceId, fitView, setViewport]);
 
   const onConnect = useCallback((params: Connection) => {
+    if (!params.source || !params.target || params.source === params.target) return;
+
+    // Prevent duplicate or reciprocal connections (A -> B when B -> A already exists)
+    const exists = edges.some(
+      (edge) =>
+        (edge.source === params.source && edge.target === params.target) ||
+        (edge.source === params.target && edge.target === params.source),
+    );
+    if (exists) return;
+
     const source = nodes.find((node) => node.id === params.source);
     const target = nodes.find((node) => node.id === params.target);
     const connectionType = classifyConnectionType(source?.type, target?.type);
@@ -1137,7 +1147,10 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           <button
             type="button"
             className="canvas-action-btn icon-btn"
-            onClick={() => addTerminalNode()}
+            onClick={() => {
+              setTerminalSettingsNodeId(null);
+              setShowTerminalSettings(true);
+            }}
             aria-label="Criar novo terminal"
             title="Novo terminal"
           >
@@ -1343,6 +1356,10 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
               ? terminalSettingsFromContent(editingTerminalContent, workspaceDirectory)
               : { name: `Terminal ${nodes.filter((node) => node.type === "terminal").length + 1}`, workingDirectory: workspaceDirectory }}
             onApply={applySettings}
+            onCancel={() => {
+              setShowTerminalSettings(false);
+              setTerminalSettingsNodeId(null);
+            }}
           />
         </div>
       )}

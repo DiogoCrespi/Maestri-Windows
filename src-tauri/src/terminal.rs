@@ -179,7 +179,7 @@ impl ScrollbackWorker {
     }
 }
 
-struct TerminalSession {
+pub(crate) struct TerminalSession {
     id: String,
     session_token: u64,
     ipc_credential: String,
@@ -330,6 +330,12 @@ impl TerminalSession {
             (None, Ok(())) => Ok(()),
         }
     }
+
+    fn transition_exited(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = Lifecycle::Exited;
+        }
+    }
 }
 
 /// Tauri-managed registry. The inner lock is the only mutable
@@ -367,7 +373,7 @@ impl TerminalRegistry {
         Ok(())
     }
 
-    fn get(&self, id: &str) -> Result<Arc<TerminalSession>, String> {
+    pub fn get(&self, id: &str) -> Result<Arc<TerminalSession>, String> {
         let sessions = self
             .sessions
             .read()
@@ -638,10 +644,32 @@ fn build_command(
     id: &str,
     ipc_credential: &str,
 ) -> Result<CommandBuilder, String> {
-    let executable = match shell {
-        Some(value) if !value.trim().is_empty() => value.trim().to_owned(),
-        _ => DEFAULT_SHELL.to_string(),
+    let raw_shell = match shell {
+        Some(value) => value.replace('\0', "").trim().to_owned(),
+        None => String::new(),
     };
+
+    let mut parsed_args = args.unwrap_or_default();
+    let mut executable = if raw_shell.is_empty() {
+        DEFAULT_SHELL.to_string()
+    } else {
+        raw_shell
+    };
+
+    // If shell contains spaces (e.g. "powershell.exe -NoLogo -NoProfile"), separate executable from default args
+    if executable.contains(' ') || executable.contains('\t') {
+        let parts: Vec<String> = executable
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        if !parts.is_empty() {
+            executable = parts[0].clone();
+            let mut new_args = parts[1..].to_vec();
+            new_args.extend(parsed_args);
+            parsed_args = new_args;
+        }
+    }
+
     if executable.chars().any(char::is_control) {
         return Err("shell path must not contain control characters".to_string());
     }
@@ -667,7 +695,7 @@ fn build_command(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
 
-    // Discover omaestri.exe and prepend to PATH (protected from user env)
+    // Discover omaestri.exe and prepend to PATH + export MAESTRI_CLI path
     let current_exe = std::env::current_exe().ok();
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     if let Some(cli_dir) =
@@ -679,6 +707,9 @@ fn build_command(
         {
             command.env("PATH", child_path);
         }
+        let exe_name = if cli_dir.join("maestri.exe").is_file() { "maestri.exe" } else { "omaestri.exe" };
+        let full_cli_path = cli_dir.join(exe_name);
+        command.env("MAESTRI_CLI", full_cli_path.to_string_lossy().as_ref());
     }
 
     let basename = PathBuf::from(&executable)
@@ -686,18 +717,16 @@ fn build_command(
         .and_then(|name| name.to_str())
         .map(|name| name.to_ascii_lowercase());
 
-    let explicit_command_mode = args
-        .as_ref()
-        .map(|values| has_explicit_command_mode(values, basename.as_deref()))
-        .unwrap_or(false);
+    let explicit_command_mode = has_explicit_command_mode(&parsed_args, basename.as_deref());
 
     // If explicit args are provided, pass them directly. Otherwise, apply default flags.
-    if let Some(user_args) = args {
-        for arg in user_args {
-            if arg.chars().any(char::is_control) {
+    if !parsed_args.is_empty() {
+        for arg in parsed_args {
+            let clean_arg = arg.replace('\0', "");
+            if clean_arg.chars().any(char::is_control) {
                 return Err("command arguments must not contain control characters".to_string());
             }
-            command.arg(arg);
+            command.arg(clean_arg);
         }
     } else {
         match basename.as_deref() {
@@ -753,11 +782,23 @@ fn omaestri_candidates(current_exe: Option<&Path>, manifest_dir: &Path) -> Vec<P
     let mut candidates = Vec::new();
     if let Some(app_dir) = current_exe.and_then(Path::parent) {
         candidates.push(app_dir.join("omaestri.exe"));
+        candidates.push(app_dir.join("maestri.exe"));
     }
 
     let cli_target = manifest_dir.join("..").join("src-cli").join("target");
     candidates.push(cli_target.join("release").join("omaestri.exe"));
     candidates.push(cli_target.join("debug").join("omaestri.exe"));
+    candidates.push(cli_target.join("release").join("maestri.exe"));
+    candidates.push(cli_target.join("debug").join("maestri.exe"));
+
+    // System-wide install candidates (e.g. %LOCALAPPDATA%\Programs\Maestri or Cargo bin)
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let home = PathBuf::from(user_profile);
+        candidates.push(home.join(".cargo").join("bin").join("maestri.exe"));
+        candidates.push(home.join(".cargo").join("bin").join("omaestri.exe"));
+        candidates.push(home.join("AppData").join("Local").join("Programs").join("Maestri").join("maestri.exe"));
+        candidates.push(home.join("AppData").join("Local").join("Programs").join("Maestri").join("omaestri.exe"));
+    }
     candidates
 }
 
@@ -923,8 +964,15 @@ fn terminal_create_with_registry<R: Runtime>(
     validate_id(&id)?;
     validate_size(cols, rows)?;
 
-    // Atomic session replacement: stop existing session and remove it atomically if present.
+    // If an active running PTY session with this ID already exists in the Rust daemon registry,
+    // preserve and reuse it without stopping or restarting the underlying process.
     if let Ok(existing) = registry.get(&id) {
+        if let Ok(info) = existing.info() {
+            if info.state == "running" {
+                let _ = existing.resize(cols, rows);
+                return Ok(info);
+            }
+        }
         let _ = existing.request_stop();
         let _ = registry.remove_exact(&id, existing.session_token)?;
     }
@@ -1021,7 +1069,7 @@ fn start_ssh_threads<R: Runtime>(
         .name(format!("maestri-terminal-waiter-{waiter_id}-{waiter_token}"))
         .spawn(move || {
             let code = match waiter_child.child.lock() {
-                Ok(mut child) => child.wait().ok().and_then(|exit| exit.exit_code().map(|c| c as i32)),
+                Ok(mut child) => child.wait().ok().map(|exit| exit.exit_code() as i32),
                 Err(_) => None,
             };
 
@@ -1181,6 +1229,12 @@ fn terminal_create_ssh_with_registry<R: Runtime>(
     );
 
     if let Ok(existing) = registry.get(&id) {
+        if let Ok(info) = existing.info() {
+            if info.state == "running" {
+                let _ = existing.resize(cols, rows);
+                return Ok(info);
+            }
+        }
         let _ = existing.request_stop();
         let _ = registry.remove_exact(&id, existing.session_token)?;
     }
@@ -1887,6 +1941,7 @@ mod tests {
             recent_output: Mutex::new(VecDeque::new()),
             scrollback_worker: Mutex::new(ScrollbackWorker::spawn("term-1".to_string())),
             registry_store: Arc::clone(&registry.scrollback_store),
+            is_remote: false,
         });
 
         assert!(registry.insert(Arc::clone(&session1)).is_ok());
@@ -1936,6 +1991,7 @@ mod tests {
             recent_output: Mutex::new(VecDeque::new()),
             scrollback_worker: Mutex::new(ScrollbackWorker::spawn("term-1".to_string())),
             registry_store: Arc::clone(&registry.scrollback_store),
+            is_remote: false,
         });
 
         // Simulate session replacement
@@ -2006,6 +2062,7 @@ mod tests {
                 recent_output: Mutex::new(VecDeque::new()),
                 scrollback_worker: Mutex::new(ScrollbackWorker::spawn("repeat-id".to_string())),
                 registry_store: Arc::clone(&registry.scrollback_store),
+                is_remote: false,
             });
 
             if let Ok(existing) = registry.get("repeat-id") {

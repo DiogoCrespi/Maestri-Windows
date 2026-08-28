@@ -400,6 +400,7 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                   >
                     <option value="claudeCode">Claude Code CLI</option>
                     <option value="codex">OpenAI Codex</option>
+                    <option value="antGravity">Antigravity CLI (agy)</option>
                     <option value="genericShell">Generic Shell</option>
                   </select>
                 </div>

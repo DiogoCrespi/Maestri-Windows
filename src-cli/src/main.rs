@@ -8,6 +8,7 @@ use std::time::Duration;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const RESPONSE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const ASK_RESPONSE_READ_TIMEOUT: Duration = Duration::from_secs(11 * 60);
 
 fn main() {
     if let Err(message) = run() {
@@ -29,7 +30,7 @@ fn run() -> Result<(), String> {
     let command = args.first().map(String::as_str).unwrap_or("help");
     match command {
         "list" => {}
-        "check" | "ask" | "note" | "portal" | "recruit" | "dismiss" | "connect" | "role" => {}
+        "check" | "ask" | "reply" | "note" | "portal" | "recruit" | "dismiss" | "connect" | "role" => {}
         _ => unreachable!(),
     }
     let socket = env::var("MAESTRI_SOCKET").map_err(|_| {
@@ -73,6 +74,7 @@ fn validate_args(args: &[String]) -> Result<(), String> {
         "list" => Ok(()),
         "check" if args.len() >= 2 => Ok(()),
         "ask" if args.len() >= 3 => Ok(()),
+        "reply" if args.len() >= 3 => Ok(()),
         "note" if args.len() >= 3 && args[1] == "read" => Ok(()),
         "note" if args.len() >= 4 && args[1] == "write" => Ok(()),
         "portal" if args.len() >= 3 && args[1] == "inspect" => Ok(()),
@@ -91,6 +93,7 @@ fn validate_args(args: &[String]) -> Result<(), String> {
         "role" if args.len() == 4 && args[1] == "assign" => Ok(()),
         "check" => Err("error: usage: omaestri check \"Agent Name\" [lines]".into()),
         "ask" => Err("error: usage: omaestri ask \"Agent Name\" \"prompt\"".into()),
+        "reply" => Err("error: usage: omaestri reply REQUEST_ID \"response\"".into()),
         "note" => Err("error: usage: omaestri note read \"Note Name\" OR omaestri note write \"Note Name\" \"content\"".into()),
         "portal" => Err("error: usage: omaestri portal <inspect|click|fill|eval|navigate|screenshot> \"Portal Name\" [output.png|args...]".into()),
         "recruit" => Err("error: usage: omaestri recruit NAME [--preset PRESET] [--role ROLE] [--command CMD] [--dir DIR]".into()),
@@ -129,11 +132,16 @@ fn validate_recruit_args(args: &[String]) -> Result<(), String> {
 fn print_help() {
     println!("Maestro: recruit NAME [--preset PRESET] [--role ROLE] [--command CMD] [--dir DIR] | dismiss TARGET | connect FROM TO | role assign TARGET ROLE");
     println!("Maestro connect uses FROM and TO as graph endpoints; the authorized actor is MAESTRI_TERMINAL_ID.");
-    println!("omaestri — open-maestri inter-agent CLI\n\nUsage: omaestri <command> [args...]\n\nCommands:\n  list                         List connected agents, notes, portals\n  check \"Agent\" [lines]       View agent recent output\n  ask \"Agent\" \"prompt\"       Send prompt to connected agent\n  note read \"Note Name\"       Read content of a connected note\n  note write \"Note\" \"content\" Save content to a connected note\n  portal inspect \"Portal\"     Inspect URL, title, DOM text and inputs\n  portal click \"Portal\" \"sel\"  Click element matching selector\n  portal fill \"P\" \"sel\" \"val\" Fill input matching selector\n  portal eval \"Portal\" \"js\"   Evaluate JavaScript in portal WebView\n  portal navigate \"P\" \"url\"   Navigate portal to new URL\n  portal screenshot \"P\" [output.png]\n                               Capture a PNG of the connected portal WebView\n\nEnvironment:\n  MAESTRI_SOCKET               127.0.0.1:<port>\n  MAESTRI_TERMINAL_ID         Terminal identity sent as X-Terminal-ID\n  MAESTRI_TOKEN               Ephemeral Bearer authentication token");
+    println!("omaestri — open-maestri inter-agent CLI\n\nUsage: omaestri <command> [args...]\n\nCommands:\n  list                         List connected agents, notes, portals\n  check \"Agent\" [lines]       View agent recent output\n  ask \"Agent\" \"prompt\"       Send request and wait for the agent reply\n  reply REQUEST_ID \"response\" Complete a pending inter-agent request\n  note read \"Note Name\"       Read content of a connected note\n  note write \"Note\" \"content\" Save content to a connected note\n  portal inspect \"Portal\"     Inspect URL, title, DOM text and inputs\n  portal click \"Portal\" \"sel\"  Click element matching selector\n  portal fill \"P\" \"sel\" \"val\" Fill input matching selector\n  portal eval \"Portal\" \"js\"   Evaluate JavaScript in portal WebView\n  portal navigate \"P\" \"url\"   Navigate portal to new URL\n  portal screenshot \"P\" [output.png]\n                               Capture a PNG of the connected portal WebView\n\nEnvironment:\n  MAESTRI_SOCKET               127.0.0.1:<port>\n  MAESTRI_TERMINAL_ID         Terminal identity sent as X-Terminal-ID\n  MAESTRI_TOKEN               Ephemeral Bearer authentication token");
 }
 
 fn send(args: &[String], endpoint: &str, terminal_id: &str, token: &str) -> Result<String, String> {
-    send_with_timeout(args, endpoint, terminal_id, token, RESPONSE_READ_TIMEOUT)
+    let timeout = if args.first().is_some_and(|command| command == "ask") {
+        ASK_RESPONSE_READ_TIMEOUT
+    } else {
+        RESPONSE_READ_TIMEOUT
+    };
+    send_with_timeout(args, endpoint, terminal_id, token, timeout)
 }
 
 fn send_with_timeout(
@@ -291,6 +299,8 @@ mod tests {
         assert!(validate_args(&["list".into()]).is_ok());
         assert!(validate_args(&["check".into(), "Agent".into()]).is_ok());
         assert!(validate_args(&["ask".into(), "Agent".into(), "hello".into()]).is_ok());
+        assert!(validate_args(&["reply".into(), "request-1".into(), "done".into()]).is_ok());
+        assert!(validate_args(&["reply".into(), "request-1".into()]).is_err());
         assert!(validate_args(&["wat".into()])
             .unwrap_err()
             .contains("unknown command"));

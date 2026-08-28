@@ -85,7 +85,7 @@ export interface DesktopBridge {
   workspacePathExists: (path: string) => Promise<boolean>;
   saveWorkspace: (path: string, document: WorkspaceDocument) => Promise<void>;
   replaceAccessGraph: (
-    nodes: Array<{ id: string; name: string; nodeType?: string; resourcePath?: string | null }>,
+    nodes: Array<{ id: string; name: string; aliases?: string[]; nodeType?: string; resourcePath?: string | null; isManager?: boolean }>,
     connections: Array<{ a: string; b: string }>,
   ) => Promise<number>;
   portalRegister: (id: string, name: string, initialUrl: string, storageScope?: string) => Promise<PortalInfo>;

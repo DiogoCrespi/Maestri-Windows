@@ -31,6 +31,7 @@ pub trait IpcBackend: Send + Sync + 'static {
     fn list(&self, terminal_id: &str) -> String;
     fn check(&self, terminal_id: &str, agent: &str, lines: usize) -> String;
     fn ask(&self, terminal_id: &str, agent: &str, prompt: &str) -> String;
+    fn reply(&self, terminal_id: &str, request_id: &str, response: &str) -> String;
     fn note_read(&self, terminal_id: &str, note_name: &str) -> String;
     fn note_write(&self, terminal_id: &str, note_name: &str, content: &str) -> String;
     fn portal_inspect(&self, terminal_id: &str, portal_name: &str) -> String;
@@ -312,7 +313,7 @@ fn route(request: CliRequest, backend: &dyn IpcBackend) -> Result<CliResponse, P
         .ok_or_else(|| ProtocolError::new(200, "error: empty command"))?;
     if !matches!(
         command,
-        "list" | "check" | "ask" | "note" | "portal" | "recruit" | "dismiss" | "connect" | "role"
+        "list" | "check" | "ask" | "reply" | "note" | "portal" | "recruit" | "dismiss" | "connect" | "role"
     ) {
         return Ok(CliResponse::ok(format!(
             "error: unknown command '{command}'. Try 'omaestri list' for available commands."
@@ -333,7 +334,10 @@ fn route(request: CliRequest, backend: &dyn IpcBackend) -> Result<CliResponse, P
             backend.check(terminal_id, &request.args[1], lines)
         }
         "ask" if request.args.len() >= 3 => {
-            backend.ask(terminal_id, &request.args[1], &request.args[2])
+            backend.ask(terminal_id, &request.args[1], &request.args[2..].join(" "))
+        }
+        "reply" if request.args.len() >= 3 => {
+            backend.reply(terminal_id, &request.args[1], &request.args[2..].join(" "))
         }
         "note" if request.args.len() >= 3 && request.args[1] == "read" => {
             backend.note_read(terminal_id, &request.args[2])
@@ -379,6 +383,7 @@ fn route(request: CliRequest, backend: &dyn IpcBackend) -> Result<CliResponse, P
         }
         "check" => "error: usage: omaestri check \"Agent Name\" [lines]".to_owned(),
         "ask" => "error: usage: omaestri ask \"Agent Name\" \"prompt\"".to_owned(),
+        "reply" => "error: usage: omaestri reply REQUEST_ID \"response\"".to_owned(),
         "note" => "error: usage: omaestri note read \"Note Name\" OR omaestri note write \"Note Name\" \"content\"".to_owned(),
         "portal" => "error: usage: omaestri portal <inspect|click|fill|eval|navigate|screenshot> \"Portal Name\" [output.png|args...]".to_owned(),
         _ => unreachable!(),
@@ -660,6 +665,9 @@ mod tests {
         fn ask(&self, terminal_id: &str, agent: &str, prompt: &str) -> String {
             format!("ask:{terminal_id}:{agent}:{prompt}")
         }
+        fn reply(&self, terminal_id: &str, request_id: &str, response: &str) -> String {
+            format!("reply:{terminal_id}:{request_id}:{response}")
+        }
         fn note_read(&self, terminal_id: &str, note_name: &str) -> String {
             format!("note_read:{terminal_id}:{note_name}")
         }
@@ -802,12 +810,19 @@ mod tests {
         );
         let ask = request_with_auth(
             server.local_addr(),
-            r#"{"args":["ask","Agent","olá"]}"#,
+            r#"{"args":["ask","Agent","olá","mundo"]}"#,
+            Some("t"),
+            Some("my_token"),
+        );
+        let reply = request_with_auth(
+            server.local_addr(),
+            r#"{"args":["reply","request-1","trabalho","concluído"]}"#,
             Some("t"),
             Some("my_token"),
         );
         assert!(check.ends_with("check:t:Agent:7"));
-        assert!(ask.ends_with("ask:t:Agent:olá"));
+        assert!(ask.ends_with("ask:t:Agent:olá mundo"));
+        assert!(reply.ends_with("reply:t:request-1:trabalho concluído"));
         server.shutdown();
     }
 

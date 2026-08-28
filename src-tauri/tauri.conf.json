@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "open-maestri",
+  "productName": "Open Maestri",
   "version": "0.1.0",
   "identifier": "com.open-maestri.windows",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "open-maestri",
+        "title": "Open Maestri",
         "width": 1440,
         "height": 900,
         "minWidth": 960,

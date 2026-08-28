@@ -34,9 +34,9 @@ class MemoryStorage implements Storage {
 }
 
 describe("Preferences Model & Built-ins", () => {
-  it("includes Claude Code, Codex and generic shell built-in presets", () => {
-    expect(BUILTIN_PRESETS).toHaveLength(3);
-    expect(BUILTIN_PRESETS.map((p) => p.agentType)).toEqual(["claudeCode", "codex", "genericShell"]);
+  it("includes Claude Code, Codex, Antigravity, OpenCode and generic shell built-in presets", () => {
+    expect(BUILTIN_PRESETS).toHaveLength(5);
+    expect(BUILTIN_PRESETS.map((p) => p.agentType)).toEqual(["claudeCode", "codex", "antGravity", "genericShell", "genericShell"]);
     expect(BUILTIN_PRESETS.every((p) => p.isBuiltIn)).toBe(true);
   });
 

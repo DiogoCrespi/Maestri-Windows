@@ -124,7 +124,66 @@
   opacity: 0.55;
 }
 
-.terminal-settings-error {
-  margin: 8px 0 0;
-  color: #fca5a5;
+.terminal-settings-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+
+.terminal-preset-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px !important;
+  border: 1px solid #3f3f46 !important;
+  border-radius: 6px !important;
+  background: #09090b !important;
+  color: #a1a1aa !important;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  min-width: 0;
+}
+
+.terminal-preset-card:hover {
+  border-color: #71717a !important;
+  background: #18181b !important;
+  color: #f4f4f5 !important;
+}
+
+.terminal-preset-card.selected {
+  background: #1e1b4b !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+.terminal-preset-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.terminal-preset-name {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-settings button.terminal-settings-cancel-btn {
+  border-color: #52525b;
+  background: #27272a;
+  color: #a1a1aa;
+}
+
+.terminal-settings button.terminal-settings-cancel-btn:hover:not(:disabled) {
+  background: #3f3f46;
+  color: #f4f4f5;
 }

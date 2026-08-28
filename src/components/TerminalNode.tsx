@@ -185,7 +185,6 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
       resizeObserver.disconnect();
       onDataDisposable.dispose();
       unsubscribeData?.();
-      void desktopBridge.closePty?.(ptyId).catch(() => undefined);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
@@ -282,8 +281,15 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         handleStyle={{ width: 8, height: 8, backgroundColor: "#3b82f6", borderRadius: 2 }}
       />
 
-      <Handle type="target" position={Position.Top} className="connection-handle" />
-      <Handle type="source" position={Position.Bottom} className="connection-handle" />
+      {/* Border connection handles on all 4 sides (invisible & expanded) */}
+      <Handle type="target" position={Position.Top} id="top-target" className="connection-handle edge-handle edge-handle-top" />
+      <Handle type="source" position={Position.Top} id="top-source" className="connection-handle edge-handle edge-handle-top" />
+      <Handle type="target" position={Position.Right} id="right-target" className="connection-handle edge-handle edge-handle-right" />
+      <Handle type="source" position={Position.Right} id="right-source" className="connection-handle edge-handle edge-handle-right" />
+      <Handle type="target" position={Position.Bottom} id="bottom-target" className="connection-handle edge-handle edge-handle-bottom" />
+      <Handle type="source" position={Position.Bottom} id="bottom-source" className="connection-handle edge-handle edge-handle-bottom" />
+      <Handle type="target" position={Position.Left} id="left-target" className="connection-handle edge-handle edge-handle-left" />
+      <Handle type="source" position={Position.Left} id="left-source" className="connection-handle edge-handle edge-handle-left" />
 
       {/* Terminal Header - Serves as drag handle for React Flow */}
       <div
@@ -373,6 +379,7 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
+              void desktopBridge.closePty?.(ptyId).catch(() => undefined);
               nodeData.onClose?.();
             }}
             title="Fechar terminal"

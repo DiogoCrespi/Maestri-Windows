@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn test_remote_contract_timeout_and_failure_handling() {
         let state = HandshakeState::Failed { reason: "Handshake timed out after 10s waiting for READY".to_string() };
-        if let HandshakeState::Failed(reason) = state {
+        if let HandshakeState::Failed { reason } = state {
             assert!(reason.contains("timed out"));
         } else {
             panic!("Expected Failed state");

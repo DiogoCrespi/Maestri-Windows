@@ -529,8 +529,15 @@ export const PortalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         handleStyle={{ width: 8, height: 8, backgroundColor: "#3b82f6", borderRadius: 2 }}
       />
 
-      <Handle type="target" position={Position.Top} className="connection-handle" />
-      <Handle type="source" position={Position.Bottom} className="connection-handle" />
+      {/* Border connection handles on all 4 sides (invisible & expanded) */}
+      <Handle type="target" position={Position.Top} id="top-target" className="edge-handle edge-handle-top" />
+      <Handle type="source" position={Position.Top} id="top-source" className="edge-handle edge-handle-top" />
+      <Handle type="target" position={Position.Right} id="right-target" className="edge-handle edge-handle-right" />
+      <Handle type="source" position={Position.Right} id="right-source" className="edge-handle edge-handle-right" />
+      <Handle type="target" position={Position.Bottom} id="bottom-target" className="edge-handle edge-handle-bottom" />
+      <Handle type="source" position={Position.Bottom} id="bottom-source" className="edge-handle edge-handle-bottom" />
+      <Handle type="target" position={Position.Left} id="left-target" className="edge-handle edge-handle-left" />
+      <Handle type="source" position={Position.Left} id="left-source" className="edge-handle edge-handle-left" />
 
       {/* Header with drag handle and URL bar */}
       <div className="portal-header drag-handle">

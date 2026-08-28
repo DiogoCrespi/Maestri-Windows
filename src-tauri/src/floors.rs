@@ -217,7 +217,7 @@ fn verify_registered_git_worktree(root_path: &Path, expected_path: &Path, expect
     };
 
     let mut current_wt: Option<PathBuf> = None;
-    let mut current_branch: Option<String> = None;
+    let mut _current_branch: Option<String> = None;
     let mut registered = false;
 
     for line in porcelain.lines() {
@@ -225,11 +225,11 @@ fn verify_registered_git_worktree(root_path: &Path, expected_path: &Path, expect
             let wt_str = line.trim_start_matches("worktree ").trim();
             let wt_path = PathBuf::from(wt_str);
             current_wt = Some(wt_path.canonicalize().unwrap_or(wt_path));
-            current_branch = None;
+            _current_branch = None;
         } else if line.starts_with("branch ") {
             let branch_ref = line.trim_start_matches("branch ").trim();
             let branch_name = branch_ref.trim_start_matches("refs/heads/");
-            current_branch = Some(branch_name.to_string());
+            _current_branch = Some(branch_name.to_string());
 
             if let Some(ref wt) = current_wt {
                 if wt == &canonical_expected {

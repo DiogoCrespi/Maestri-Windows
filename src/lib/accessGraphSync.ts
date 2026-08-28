@@ -3,6 +3,7 @@ import type { Edge as ReactFlowEdge, Node as ReactFlowNode } from "@xyflow/react
 export interface AccessGraphNode {
   id: string;
   name: string;
+  aliases?: string[];
   nodeType?: string;
   resourcePath?: string | null;
   isManager?: boolean;
@@ -103,6 +104,19 @@ export function buildGraphIdentityMap(nodes: readonly ReactFlowNode[]): GraphIde
   const identities: GraphIdentity[] = [];
   const byReactFlowNodeId = new Map<string, GraphIdentity>();
   const byAlias = new Map<string, GraphIdentity>();
+  const ambiguousAliases = new Set<string>();
+
+  const registerAlias = (alias: string, identity: GraphIdentity): void => {
+    const key = lookupKey(alias);
+    if (ambiguousAliases.has(key)) return;
+    const existing = byAlias.get(key);
+    if (existing && existing.reactFlowNodeId !== identity.reactFlowNodeId) {
+      byAlias.delete(key);
+      ambiguousAliases.add(key);
+      return;
+    }
+    byAlias.set(key, identity);
+  };
 
   for (const node of nodes) {
     const content = graphContent(node);
@@ -112,18 +126,21 @@ export function buildGraphIdentityMap(nodes: readonly ReactFlowNode[]): GraphIde
     if (collision && collision.reactFlowNodeId !== node.id) {
       graphId = canonicalGraphId(`${candidate}|node:${node.id}`);
     }
-    const aliases = [node.id, candidate, stringValue(content.id), stringValue(content.graphId)]
+    const aliasValues = [node.id, candidate, stringValue(content.id), stringValue(content.graphId)]
       .filter((value): value is string => Boolean(value));
-    const identity: GraphIdentity = { reactFlowNodeId: node.id, graphId, aliases: [...new Set(aliases)] };
+    const aliases = aliasValues.filter((alias, index) => (
+      aliasValues.findIndex((candidateAlias) => lookupKey(candidateAlias) === lookupKey(alias)) === index
+    ));
+    const identity: GraphIdentity = { reactFlowNodeId: node.id, graphId, aliases };
     identities.push(identity);
     byReactFlowNodeId.set(lookupKey(node.id), identity);
-    for (const alias of identity.aliases) byAlias.set(lookupKey(alias), identity);
-    byAlias.set(lookupKey(graphId), identity);
+    for (const alias of identity.aliases) registerAlias(alias, identity);
+    registerAlias(graphId, identity);
   }
 
   const resolve = (id: string | null | undefined): GraphIdentity | undefined => {
     if (!id) return undefined;
-    return byAlias.get(lookupKey(id)) || byReactFlowNodeId.get(lookupKey(id));
+    return byReactFlowNodeId.get(lookupKey(id)) || byAlias.get(lookupKey(id));
   };
 
   return {
@@ -168,6 +185,7 @@ export function buildAccessGraphSnapshot(
       graphNode = {
         id: identity.graphId,
         name: stringValue(content.name) || "Terminal",
+        aliases: identity.aliases,
         nodeType: "terminal",
         isManager: content.isManager === true,
       };
@@ -177,6 +195,7 @@ export function buildAccessGraphSnapshot(
         graphNode = {
           id: identity.graphId,
           name: stringValue(content.title) || stringValue(content.fileName) || "Note",
+          aliases: identity.aliases,
           nodeType: "note",
           resourcePath,
         };
@@ -185,6 +204,7 @@ export function buildAccessGraphSnapshot(
       graphNode = {
         id: identity.graphId,
         name: stringValue(content.name) || "Portal",
+        aliases: identity.aliases,
         nodeType: "portal",
       };
     }

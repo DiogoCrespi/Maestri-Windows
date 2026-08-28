@@ -168,6 +168,7 @@ values automatically:
 omaestri list
 omaestri check "Worker" 100
 omaestri ask "Worker" "Run the tests and summarize failures"
+omaestri reply "<request-id>" "Tests passed; summary returned to the requester"
 omaestri note read "Plan"
 omaestri note write "Plan" "Updated status"
 omaestri portal inspect "Docs"
@@ -185,14 +186,31 @@ Targets may be addressed by unambiguous name or UUID. Commands are limited to
 nodes directly authorized by canvas connections; unknown, ambiguous,
 disconnected, stale, or spoofed identities are rejected.
 
+`omaestri ask` is a request-response operation. It injects a correlated request
+into the target terminal and waits for that target to complete it with
+`omaestri reply REQUEST_ID "response"`. The response is returned directly to
+the requesting terminal; workspace files are not used as the reply channel.
+Only the requested target terminal can complete the pending request, and an
+unanswered request times out after ten minutes.
+
 ## Release build
 
-Build the CLI, frontend, Tauri application, MSI, and NSIS installer:
+Build the CLI, frontend, Tauri application, MSI, NSIS installer, and portable
+ZIP:
 
 ```powershell
 .\scripts\Build-MaestriRelease.ps1
-Get-ChildItem src-tauri\target\release\bundle -Recurse
+Get-ChildItem release
 ```
+
+The `release` directory contains three end-user options:
+
+- `Open-Maestri-Windows-v0.1.0-Setup.exe`: recommended per-user installer.
+- `Open-Maestri-Windows-v0.1.0.msi`: alternative Windows Installer package.
+- `Open-Maestri-Windows-v0.1.0-portable.zip`: extract and double-click
+  `Open Maestri.exe`; keep the bundled `omaestri.exe` beside it.
+
+`SHA256SUMS.txt` contains the SHA-256 digest for every distributable artifact.
 
 Validate the resource and bundle configuration without compiling:
 

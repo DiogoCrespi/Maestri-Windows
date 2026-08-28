@@ -6,6 +6,6 @@ dist/
 .vscode/
 *.tsbuildinfo
 test-results/
-
+release/
 
 

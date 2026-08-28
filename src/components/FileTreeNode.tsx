@@ -86,6 +86,8 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
   const [currentPath, setCurrentPath] = useState<string>(initialRootPath);
   const [history, setHistory] = useState<string[]>([]);
   const [entries, setEntries] = useState<FileEntryPayload[]>([]);
+  const [totalEntries, setTotalEntries] = useState<number>(0);
+  const [isTruncated, setIsTruncated] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedEntryPath, setSelectedEntryPath] = useState<string | null>(null);
@@ -118,6 +120,8 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
       setIsLoading(false);
       setError("Navegação de arquivos não disponível para workspaces remotos (SSH)");
       setEntries([]);
+      setTotalEntries(0);
+      setIsTruncated(false);
       return;
     }
     setIsLoading(true);
@@ -129,6 +133,8 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         includeHidden: showHidden,
       });
       setEntries(res.entries);
+      setTotalEntries(res.totalEntries ?? res.entries.length);
+      setIsTruncated(Boolean(res.isTruncated));
       setCurrentPath(res.path);
     } catch (err) {
       const errorMsg =
@@ -138,6 +144,9 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           ? err.message
           : "Failed to list directory";
       setError(errorMsg);
+      setEntries([]);
+      setTotalEntries(0);
+      setIsTruncated(false);
     } finally {
       setIsLoading(false);
     }
@@ -272,59 +281,72 @@ export const FileTreeNode: React.FC<NodeProps> = ({ id, selected, data }) => {
         )}
 
         {!isLoading && !error && entries.length > 0 && (
-          viewMode === "grid" ? (
-            <div className="file-tree-grid" role="list">
-              {entries.map((entry) => (
-                <div
-                  key={entry.path}
-                  role="listitem"
-                  className={`file-tree-grid-item ${
-                    selectedEntryPath === entry.path ? "item-selected" : ""
-                  }`}
-                  draggable={entry.isFile}
-                  onClick={() => handleItemClick(entry)}
-                  onDoubleClick={() => handleItemDoubleClick(entry)}
-                  onDragStart={(event) => handleDragStart(event, entry)}
-                  title={`${entry.name}${entry.isFile ? ` (${formatBytes(entry.size)})` : ""}`}
-                >
-                  <span className="grid-item-icon">
-                    {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
-                  </span>
-                  <span className="grid-item-name">{entry.name}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <ul className="file-tree-list">
-              {entries.map((entry) => (
-                <li
-                  key={entry.path}
-                  className={`file-tree-item ${
-                    selectedEntryPath === entry.path ? "item-selected" : ""
-                  }`}
-                  draggable={entry.isFile}
-                  onClick={() => handleItemClick(entry)}
-                  onDoubleClick={() => handleItemDoubleClick(entry)}
-                  onDragStart={(event) => handleDragStart(event, entry)}
-                >
-                  <span className="item-icon">
-                    {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
-                  </span>
-                  <span className="item-name">{entry.name}</span>
-                  {entry.isFile && (
-                    <span className="item-size">
-                      {formatBytes(entry.size)}
+          <>
+            {isTruncated && (
+              <div className="file-tree-truncation-bar" role="status" aria-live="polite">
+                <span className="truncation-icon">⚠️</span>
+                <span>{formatTruncationMessage(entries.length, totalEntries)}</span>
+              </div>
+            )}
+            {viewMode === "grid" ? (
+              <div className="file-tree-grid" role="list">
+                {entries.map((entry) => (
+                  <div
+                    key={entry.path}
+                    role="listitem"
+                    className={`file-tree-grid-item ${
+                      selectedEntryPath === entry.path ? "item-selected" : ""
+                    }`}
+                    draggable={entry.isFile}
+                    onClick={() => handleItemClick(entry)}
+                    onDoubleClick={() => handleItemDoubleClick(entry)}
+                    onDragStart={(event) => handleDragStart(event, entry)}
+                    title={`${entry.name}${entry.isFile ? ` (${formatBytes(entry.size)})` : ""}`}
+                  >
+                    <span className="grid-item-icon">
+                      {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
                     </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )
+                    <span className="grid-item-name">{entry.name}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <ul className="file-tree-list">
+                {entries.map((entry) => (
+                  <li
+                    key={entry.path}
+                    className={`file-tree-item ${
+                      selectedEntryPath === entry.path ? "item-selected" : ""
+                    }`}
+                    draggable={entry.isFile}
+                    onClick={() => handleItemClick(entry)}
+                    onDoubleClick={() => handleItemDoubleClick(entry)}
+                    onDragStart={(event) => handleDragStart(event, entry)}
+                  >
+                    <span className="item-icon">
+                      {entry.isDir ? "📁" : entry.isSymlink ? "🔗" : "📄"}
+                    </span>
+                    <span className="item-name">{entry.name}</span>
+                    {entry.isFile && (
+                      <span className="item-size">
+                        {formatBytes(entry.size)}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 };
+
+export function formatTruncationMessage(shown: number, total: number): string {
+  const safeTotal = Math.max(shown, total);
+  return `Mostrando ${shown} de ${safeTotal} itens`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";

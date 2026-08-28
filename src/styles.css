@@ -99,6 +99,48 @@ button:disabled {
   border: 2px solid #18181b !important;
 }
 
+/* Edge Connection Handles (Invisible full-perimeter border handles) */
+.edge-handle {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  opacity: 0 !important;
+  z-index: 10 !important;
+}
+
+.edge-handle-top {
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 12px !important;
+  transform: translateY(-50%) !important;
+}
+
+.edge-handle-bottom {
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 12px !important;
+  transform: translateY(50%) !important;
+}
+
+.edge-handle-left {
+  top: 0 !important;
+  left: 0 !important;
+  width: 12px !important;
+  height: 100% !important;
+  transform: translateX(-50%) !important;
+}
+
+.edge-handle-right {
+  top: 0 !important;
+  right: 0 !important;
+  left: auto !important;
+  width: 12px !important;
+  height: 100% !important;
+  transform: translateX(50%) !important;
+}
+
 /* Terminal Node styling */
 .terminal-node-container {
   box-sizing: border-box;

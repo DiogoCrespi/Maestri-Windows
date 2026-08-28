@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CanvasWorkspace } from "./components/CanvasWorkspace";
 import { AppContextMenu } from "./components/AppContextMenu";
 import { ProjectManagerModal } from "./components/ProjectManagerModal";
+import { Sidebar } from "./components/Sidebar";
 import { desktopBridge } from "./lib/desktopBridge";
 import testWorkspaceData from "./model/TestWorkspace.json";
 import { parseWorkspaceDocument } from "./model/workspace";
@@ -289,12 +290,18 @@ export const App: React.FC = () => {
   }, [loadWorkspace]);
 
   const openProjectDirectory = useCallback(async (selectedProjectPath: string) => {
-    if (!confirmDiscardChanges()) return;
     const projectPath = normalizeProjectPath(selectedProjectPath);
     if (!projectPath) {
       setProjectManagerError("A pasta escolhida precisa ser um caminho absoluto válido.");
       return;
     }
+    const workspacePath = workspacePathForProject(projectPath);
+    if (confirmedPathRef.current && confirmedPathRef.current.toLowerCase() === workspacePath.toLowerCase()) {
+      setProjectManagerOpen(false);
+      setStatus(`Projeto já está ativo: ${projectPath}`);
+      return;
+    }
+    if (!confirmDiscardChanges()) return;
     setBusy(true);
     setProjectManagerError(null);
     setStatus(`Abrindo projeto: ${projectPath}`);
@@ -512,25 +519,23 @@ export const App: React.FC = () => {
 
   return (
     <div className="app-container" style={{ width: "100vw", height: "100vh", backgroundColor: "#09090b", overflow: "hidden" }}>
-      <div
-        className="nodrag nowheel"
-        style={{ position: "absolute", inset: "12px 12px auto 12px", zIndex: 200, display: "flex", alignItems: "center", gap: 8, padding: 8, border: "1px solid #27272a", borderRadius: 8, background: "#18181bf2", color: "#d4d4d8" }}
-      >
-        <input
-          aria-label="Caminho do workspace"
-          value={path}
-          onChange={(event) => setPath(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") void openWorkspace(); }}
-          style={{ flex: 1, minWidth: 240, padding: "7px 9px", color: "#f4f4f5", background: "#09090b", border: "1px solid #3f3f46", borderRadius: 5 }}
-        />
-        <button type="button" disabled={busy} onClick={newWorkspace}>Novo espaço</button>
-        <button type="button" disabled={busy} onClick={() => void chooseAndOpenWorkspace()}>Abrir…</button>
-        <button type="button" disabled={busy || !path.trim()} onClick={() => void saveWorkspace()}>Salvar{isDirty ? " *" : ""}</button>
-        <button type="button" disabled={busy} onClick={() => void saveWorkspaceAs()}>Salvar como…</button>
-        <span role="status" aria-live="polite" title={status} style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
-          {status}
-        </span>
-      </div>
+      <Sidebar
+        path={path}
+        confirmedPath={confirmedPath}
+        isDirty={isDirty}
+        status={status}
+        busy={busy}
+        recentProjects={recentProjects}
+        onPathChange={setPath}
+        onOpenWorkspacePath={() => void openWorkspace()}
+        onNewWorkspace={newWorkspace}
+        onChooseAndOpenWorkspace={() => void chooseAndOpenWorkspace()}
+        onSaveWorkspace={() => void saveWorkspace()}
+        onSaveWorkspaceAs={() => void saveWorkspaceAs()}
+        onOpenProject={(projectPath) => void openProjectDirectory(projectPath)}
+        onRemoveRecentProject={(projectPath) => removeRecent({ name: "", path: projectPath, lastOpenedAt: "" })}
+        onOpenProjectManager={() => setProjectManagerOpen(true)}
+      />
       {projectManagerOpen && (
         <ProjectManagerModal
           projects={recentProjects}
