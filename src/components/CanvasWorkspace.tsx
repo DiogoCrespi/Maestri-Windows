@@ -296,6 +296,7 @@ export function reduceCanvasEscapeKey(state: CanvasFreehandState): ReduceEscapeK
 export interface TerminalScrollbackMetadata {
   scrollbackFile?: string | null;
   scrollbackLineCount?: number;
+  agentSession?: TerminalContent["agentSession"];
 }
 
 export function mergeTerminalScrollbackMetadata(
@@ -310,7 +311,12 @@ export function mergeTerminalScrollbackMetadata(
     && update.scrollbackLineCount >= 0
     ? update.scrollbackLineCount
     : currentLineCount;
-  if (currentFile === nextFile && currentLineCount === nextLineCount) {
+  const currentSession = current.agentSession ?? null;
+  const nextSession = update.agentSession === undefined ? currentSession : update.agentSession ?? null;
+  const sessionChanged = currentSession?.provider !== nextSession?.provider
+    || currentSession?.sessionId !== nextSession?.sessionId
+    || currentSession?.capturedAt !== nextSession?.capturedAt;
+  if (currentFile === nextFile && currentLineCount === nextLineCount && !sessionChanged) {
     return { content: current, changed: false };
   }
   return {
@@ -318,6 +324,7 @@ export function mergeTerminalScrollbackMetadata(
       ...current,
       scrollbackFile: nextFile,
       scrollbackLineCount: nextLineCount,
+      agentSession: nextSession,
     },
     changed: true,
   };
@@ -784,6 +791,7 @@ const CanvasInner: React.FC<CanvasWorkspaceProps> = ({ workspacePath }) => {
           onChangeContent: (content: Record<string, unknown>) => updateDecorativeContent(node.id, content),
         } : {}),
         ...(node.type === "terminal" ? {
+          workspacePath,
           onChangeContent: (content: TerminalContent) => updateTerminalScrollback(node.id, content),
         } : {}),
       },

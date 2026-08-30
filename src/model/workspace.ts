@@ -56,6 +56,15 @@ export interface TerminalContent {
   fontSize?: number | null;
   args?: string[];
   env?: Record<string, string>;
+  agentSession?: AgentSessionMetadata | null;
+}
+
+export type AgentSessionProvider = "codex" | "antGravity" | "claudeCode";
+
+export interface AgentSessionMetadata {
+  provider: AgentSessionProvider;
+  sessionId: string;
+  capturedAt: string;
 }
 
 export interface StickyNoteContent {

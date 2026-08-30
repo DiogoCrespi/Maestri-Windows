@@ -309,7 +309,7 @@ impl ScrollbackStore {
 }
 
 /// Helper function to reject symlinks and reparse points on Windows
-fn validate_no_reparse_or_symlink(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_no_reparse_or_symlink(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }

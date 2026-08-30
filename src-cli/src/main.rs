@@ -30,7 +30,8 @@ fn run() -> Result<(), String> {
     let command = args.first().map(String::as_str).unwrap_or("help");
     match command {
         "list" => {}
-        "check" | "ask" | "reply" | "note" | "portal" | "recruit" | "dismiss" | "connect" | "role" => {}
+        "check" | "ask" | "reply" | "note" | "portal" | "recruit" | "dismiss" | "connect"
+        | "role" => {}
         _ => unreachable!(),
     }
     let socket = env::var("MAESTRI_SOCKET").map_err(|_| {
@@ -42,12 +43,75 @@ fn run() -> Result<(), String> {
     let token = env::var("MAESTRI_TOKEN").map_err(|_| {
         "only available inside open-maestri terminals (MAESTRI_TOKEN not set).".to_owned()
     })?;
+    register_current_agent_session(&socket, &terminal_id, &token);
     let response = send(&args, &socket, &terminal_id, &token)?;
     print!("{response}");
     if !response.ends_with('\n') {
         println!();
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedAgentSession {
+    provider: &'static str,
+    session_id: String,
+    workspace_path: String,
+}
+
+fn register_current_agent_session(socket: &str, terminal_id: &str, token: &str) {
+    let Some(session) = detect_agent_session(|key| env::var(key).ok()) else {
+        return;
+    };
+    let registration = vec![
+        "session".to_string(),
+        "register".to_string(),
+        session.provider.to_string(),
+        session.session_id,
+        session.workspace_path,
+    ];
+    // Session capture must never make the user's actual omaestri command fail.
+    // A later invocation retries registration automatically.
+    let _ = send(&registration, socket, terminal_id, token);
+}
+
+fn detect_agent_session<F>(mut lookup: F) -> Option<CapturedAgentSession>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let agent_type = lookup("OPEN_MAESTRI_AGENT_TYPE")?;
+    let workspace_path = lookup("OPEN_MAESTRI_WORKSPACE_PATH")?;
+    if workspace_path.trim().is_empty() || workspace_path.chars().any(char::is_control) {
+        return None;
+    }
+    let (provider, keys): (&'static str, &[&str]) =
+        match agent_type.trim().to_ascii_lowercase().as_str() {
+            "codex" => ("codex", &["CODEX_THREAD_ID", "CODEX_SESSION_ID"]),
+            "antgravity" | "ant_gravity" => ("antGravity", &["ANTIGRAVITY_CONVERSATION_ID"]),
+            "claudecode" | "claude_code" | "claude" => (
+                "claudeCode",
+                &["CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"],
+            ),
+            _ => return None,
+        };
+    let session_id = keys.iter().find_map(|key| {
+        let value = lookup(key)?;
+        valid_session_id(&value).then(|| value.trim().to_string())
+    })?;
+    Some(CapturedAgentSession {
+        provider,
+        session_id,
+        workspace_path: workspace_path.trim().to_string(),
+    })
+}
+
+fn valid_session_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 256
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+        })
 }
 
 fn absolutize_screenshot_output(args: &mut [String]) -> Result<(), String> {
@@ -304,6 +368,43 @@ mod tests {
         assert!(validate_args(&["wat".into()])
             .unwrap_err()
             .contains("unknown command"));
+    }
+
+    #[test]
+    fn captures_only_the_session_for_the_configured_agent_provider() {
+        let values = std::collections::HashMap::from([
+            ("OPEN_MAESTRI_AGENT_TYPE", "antGravity"),
+            ("OPEN_MAESTRI_WORKSPACE_PATH", r"C:\work\workspace.json"),
+            ("CODEX_THREAD_ID", "stale-codex-session"),
+            ("ANTIGRAVITY_CONVERSATION_ID", "antgravity-session-42"),
+        ]);
+        let captured = detect_agent_session(|key| values.get(key).map(|value| value.to_string()))
+            .expect("Antigravity session should be detected");
+        assert_eq!(captured.provider, "antGravity");
+        assert_eq!(captured.session_id, "antgravity-session-42");
+    }
+
+    #[test]
+    fn prefers_codex_thread_id_and_rejects_unsafe_session_ids() {
+        let values = std::collections::HashMap::from([
+            ("OPEN_MAESTRI_AGENT_TYPE", "codex"),
+            ("OPEN_MAESTRI_WORKSPACE_PATH", r"C:\work\workspace.json"),
+            ("CODEX_THREAD_ID", "thread-123"),
+            ("CODEX_SESSION_ID", "session-456"),
+        ]);
+        let captured =
+            detect_agent_session(|key| values.get(key).map(|value| value.to_string())).unwrap();
+        assert_eq!(captured.session_id, "thread-123");
+
+        let unsafe_values = std::collections::HashMap::from([
+            ("OPEN_MAESTRI_AGENT_TYPE", "codex"),
+            ("OPEN_MAESTRI_WORKSPACE_PATH", r"C:\work\workspace.json"),
+            ("CODEX_THREAD_ID", "bad;session"),
+        ]);
+        assert!(
+            detect_agent_session(|key| unsafe_values.get(key).map(|value| value.to_string()))
+                .is_none()
+        );
     }
 
     #[test]

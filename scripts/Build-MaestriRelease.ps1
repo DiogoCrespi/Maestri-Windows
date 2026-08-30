@@ -73,7 +73,6 @@ $appBinary = Join-Path $tauriRoot "target\release\open-maestri-windows.exe"
 $bundleRoot = Join-Path $tauriRoot "target\release\bundle"
 $noticesPath = Join-Path $root "THIRD_PARTY_NOTICES.md"
 $licensePath = Join-Path $root "LICENSE"
-$releaseNotesPath = Join-Path $root "RELEASE_NOTES_0.1.0.md"
 
 try {
     Test-ScriptSyntax
@@ -82,11 +81,12 @@ try {
     Assert-Condition (Test-Path -LiteralPath (Join-Path $cliRoot "Cargo.toml") -PathType Leaf) "CLI manifest not found."
     Assert-Condition (Test-Path -LiteralPath (Join-Path $tauriRoot "Cargo.toml") -PathType Leaf) "Tauri manifest not found."
     Assert-Condition (Test-Path -LiteralPath $licensePath -PathType Leaf) "GPL license file not found: $licensePath"
-    Assert-Condition (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf) "Release notes not found: $releaseNotesPath"
 
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     $version = [string]$config.version
     Assert-Condition (-not [string]::IsNullOrWhiteSpace($version)) "Tauri config version is required."
+    $releaseNotesPath = Join-Path $root "RELEASE_NOTES_$version.md"
+    Assert-Condition (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf) "Release notes not found: $releaseNotesPath"
     $resource = $config.bundle.resources.'target/release/omaestri.exe'
     Assert-Condition ($resource -eq "omaestri.exe") "Tauri resources must map target/release/omaestri.exe to omaestri.exe."
 

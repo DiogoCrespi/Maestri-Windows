@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import type { WorkspaceDocument } from "../model/workspace";
+import type {
+  AgentSessionMetadata,
+  AgentSessionProvider,
+  WorkspaceDocument,
+} from "../model/workspace";
 
 export interface CreateTerminalOptions {
   cols?: number;
@@ -23,6 +27,15 @@ export interface TerminalOutputPayload {
 export interface TerminalExitedPayload {
   terminalId: string;
   exitCode: number | null;
+}
+
+export interface AgentSessionPayload extends AgentSessionMetadata {
+  terminalId: string;
+}
+
+export interface AgentSessionLaunchContext {
+  session: AgentSessionMetadata | null;
+  agentLogPath: string | null;
 }
 
 interface TerminalInfo {
@@ -74,6 +87,7 @@ export interface DesktopBridge {
   closePty?: (id: string) => Promise<void>;
   onPtyData?: (id: string, callback: (data: string) => void) => () => void;
   onPtyExit?: (id: string, callback: (code: number) => void) => () => void;
+  onPtyAgentSession?: (id: string, callback: (session: AgentSessionMetadata) => void) => () => void;
 
   createTerminal: (id: string, options?: CreateTerminalOptions) => Promise<void>;
   stopTerminal: (id: string) => Promise<void>;
@@ -81,6 +95,12 @@ export interface DesktopBridge {
   resizeTerminal: (id: string, cols: number, rows: number) => Promise<void>;
   onTerminalOutput: (callback: (payload: TerminalOutputPayload) => void) => Promise<() => void>;
   onTerminalExited: (callback: (payload: TerminalExitedPayload) => void) => Promise<() => void>;
+  getAgentSession: (id: string, workspacePath: string) => Promise<AgentSessionMetadata | null>;
+  getAgentSessionLaunchContext: (
+    id: string,
+    workspacePath: string,
+    provider: AgentSessionProvider,
+  ) => Promise<AgentSessionLaunchContext>;
   loadWorkspace: (path: string) => Promise<WorkspaceDocument>;
   workspacePathExists: (path: string) => Promise<boolean>;
   saveWorkspace: (path: string, document: WorkspaceDocument) => Promise<void>;
@@ -113,6 +133,7 @@ declare global {
 
 const dataListeners = new Map<string, Set<(data: string) => void>>();
 const exitListeners = new Map<string, Set<(code: number) => void>>();
+const agentSessionListeners = new Map<string, Set<(session: AgentSessionMetadata) => void>>();
 const globalOutputListeners = new Set<(payload: TerminalOutputPayload) => void>();
 const globalExitListeners = new Set<(payload: TerminalExitedPayload) => void>();
 const isNative = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
@@ -132,6 +153,17 @@ function normalizeExit(
   };
 }
 
+function normalizeAgentSession(
+  payload: AgentSessionPayload & { terminal_id?: string; session_id?: string; captured_at?: string },
+): AgentSessionPayload {
+  return {
+    terminalId: payload.terminalId ?? payload.terminal_id ?? "",
+    provider: payload.provider,
+    sessionId: payload.sessionId ?? payload.session_id ?? "",
+    capturedAt: payload.capturedAt ?? payload.captured_at ?? "",
+  };
+}
+
 function ensureNativeListeners(): Promise<void> {
   if (!isNative) return Promise.resolve();
   if (!nativeListenersReady) {
@@ -147,6 +179,13 @@ function ensureNativeListeners(): Promise<void> {
           const event = normalizeExit(payload);
           exitListeners.get(event.terminalId)?.forEach((callback) => callback(event.exitCode ?? -1));
           globalExitListeners.forEach((callback) => callback(event));
+        },
+      ),
+      listen<AgentSessionPayload & { terminal_id?: string; session_id?: string; captured_at?: string }>(
+        "terminal://agent-session",
+        ({ payload }) => {
+          const event = normalizeAgentSession(payload);
+          agentSessionListeners.get(event.terminalId)?.forEach((callback) => callback(event));
         },
       ),
     ]).then(() => undefined);
@@ -226,6 +265,7 @@ export const desktopBridge: DesktopBridge = {
     }
     dataListeners.delete(id);
     exitListeners.delete(id);
+    agentSessionListeners.delete(id);
   },
 
   onPtyData(id: string, callback: (data: string) => void) {
@@ -245,6 +285,17 @@ export const desktopBridge: DesktopBridge = {
     exitListeners.get(id)!.add(callback);
     return () => {
       exitListeners.get(id)?.delete(callback);
+    };
+  },
+
+  onPtyAgentSession(id: string, callback: (session: AgentSessionMetadata) => void) {
+    if (!agentSessionListeners.has(id)) {
+      agentSessionListeners.set(id, new Set());
+    }
+    agentSessionListeners.get(id)!.add(callback);
+    void ensureNativeListeners();
+    return () => {
+      agentSessionListeners.get(id)?.delete(callback);
     };
   },
 
@@ -288,6 +339,22 @@ export const desktopBridge: DesktopBridge = {
     return () => {
       globalExitListeners.delete(callback);
     };
+  },
+
+  async getAgentSession(id: string, workspacePath: string) {
+    if (!isNative || !workspacePath.trim()) return null;
+    return invoke<AgentSessionMetadata | null>("agent_session_get", { id, workspacePath });
+  },
+
+  async getAgentSessionLaunchContext(id, workspacePath, provider) {
+    if (!isNative || !workspacePath.trim()) {
+      return { session: null, agentLogPath: null };
+    }
+    return invoke<AgentSessionLaunchContext>("agent_session_launch_context", {
+      id,
+      workspacePath,
+      provider,
+    });
   },
 
   async loadWorkspace(path: string) {

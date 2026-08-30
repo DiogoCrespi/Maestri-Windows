@@ -36,6 +36,15 @@ export function rememberWorkspacePath(storage: Pick<Storage, "setItem">, workspa
   if (normalized) storage.setItem(LAST_WORKSPACE_KEY, normalized);
 }
 
+export function findRememberedProject(
+  projects: RecentProject[],
+  rememberedWorkspacePath: string,
+): RecentProject | undefined {
+  const projectPath = projectDirectoryFromWorkspacePath(rememberedWorkspacePath);
+  if (!projectPath) return undefined;
+  return projects.find((project) => project.path.toLowerCase() === projectPath.toLowerCase());
+}
+
 export function workspaceFingerprint(document: ReturnType<typeof parseWorkspaceDocument>): string {
   return JSON.stringify({
     ...document,
@@ -136,8 +145,29 @@ export const App: React.FC = () => {
     isDirtyRef.current = isDirty;
   }, [isDirty]);
 
-  // Startup only validates the project history. The project manager remains
-  // blocking until the user chooses a real project; no fixture is loaded here.
+  const activateProject = useCallback((projectPath: string, workspacePath: string, document: ReturnType<typeof parseWorkspaceDocument>) => {
+    isHydratingRef.current = true;
+    loadWorkspace(document);
+    setPath(workspacePath);
+    setConfirmedPath(workspacePath);
+    rememberWorkspacePath(window.localStorage, workspacePath);
+    setRecentProjects(rememberRecentProject(window.localStorage, {
+      name: document.payload.name || projectNameFromPath(projectPath),
+      path: projectPath,
+    }));
+    setProjectManagerOpen(false);
+    setProjectManagerError(null);
+    setStatus(`Projeto ativo: ${document.payload.name || projectPath}`);
+    if (hydrationTimerRef.current) clearTimeout(hydrationTimerRef.current);
+    hydrationTimerRef.current = setTimeout(() => {
+      hydrationTimerRef.current = null;
+      isHydratingRef.current = false;
+    }, 100);
+  }, [loadWorkspace]);
+
+  // Validate project history and reopen the last valid workspace. Reopening it
+  // mounts the terminal nodes, which recover each provider conversation before
+  // their PTYs are started.
   useEffect(() => {
     let active = true;
     isHydratingRef.current = true;
@@ -155,6 +185,13 @@ export const App: React.FC = () => {
         const validProjects = await validateRecentProjects(candidates, (workspacePath) => desktopBridge.loadWorkspace(workspacePath));
         if (!active) return;
         setRecentProjects(writeRecentProjects(window.localStorage, validProjects));
+        const rememberedProject = findRememberedProject(validProjects, rememberedPath);
+        if (rememberedPath && rememberedProject) {
+          const document = await desktopBridge.loadWorkspace(rememberedPath);
+          if (!active) return;
+          activateProject(rememberedProject.path, rememberedPath, document);
+          return;
+        }
         setStatus(validProjects.length > 0 ? "Escolha um projeto recente ou abra/crie outro" : "Crie ou abra um projeto para começar");
       } catch (error) {
         if (active) {
@@ -175,7 +212,7 @@ export const App: React.FC = () => {
       if (hydrationTimerRef.current) clearTimeout(hydrationTimerRef.current);
       hydrationTimerRef.current = null;
     };
-  }, [loadWorkspace]);
+  }, [activateProject]);
 
   // Debounced autosave uses only a path confirmed by a successful open/save.
   // The fingerprint dependency reschedules after edits even while isDirty
@@ -268,26 +305,6 @@ export const App: React.FC = () => {
       unlisten?.();
     };
   }, []);
-
-  const activateProject = useCallback((projectPath: string, workspacePath: string, document: ReturnType<typeof parseWorkspaceDocument>) => {
-    isHydratingRef.current = true;
-    loadWorkspace(document);
-    setPath(workspacePath);
-    setConfirmedPath(workspacePath);
-    rememberWorkspacePath(window.localStorage, workspacePath);
-    setRecentProjects(rememberRecentProject(window.localStorage, {
-      name: document.payload.name || projectNameFromPath(projectPath),
-      path: projectPath,
-    }));
-    setProjectManagerOpen(false);
-    setProjectManagerError(null);
-    setStatus(`Projeto ativo: ${document.payload.name || projectPath}`);
-    if (hydrationTimerRef.current) clearTimeout(hydrationTimerRef.current);
-    hydrationTimerRef.current = setTimeout(() => {
-      hydrationTimerRef.current = null;
-      isHydratingRef.current = false;
-    }, 100);
-  }, [loadWorkspace]);
 
   const openProjectDirectory = useCallback(async (selectedProjectPath: string) => {
     const projectPath = normalizeProjectPath(selectedProjectPath);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import testWorkspaceFixture from "./model/TestWorkspace.json";
 import {
   canMarkCleanAfterSave,
+  findRememberedProject,
   readRememberedWorkspacePath,
   rememberWorkspacePath,
   shouldAutosave,
@@ -35,6 +36,17 @@ describe("App persistence guards", () => {
 
     rememberWorkspacePath(storage, "  C:\\workspaces\\confirmed.json  ");
     expect(readRememberedWorkspacePath(storage)).toBe("C:\\workspaces\\confirmed.json");
+  });
+
+  it("finds the valid project that must be reopened after an application restart", () => {
+    const projects = [
+      { name: "Other", path: "C:\\other", lastOpenedAt: "2026-01-01T00:00:00.000Z" },
+      { name: "Remembered", path: "C:\\workspaces\\confirmed", lastOpenedAt: "2026-01-02T00:00:00.000Z" },
+    ];
+
+    expect(findRememberedProject(projects, "c:\\workspaces\\confirmed\\workspace.json")?.name)
+      .toBe("Remembered");
+    expect(findRememberedProject(projects, "C:\\missing\\workspace.json")).toBeUndefined();
   });
 
   it("blocks autosave while hydrating even when the document is dirty", () => {

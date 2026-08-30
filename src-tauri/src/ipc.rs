@@ -32,6 +32,13 @@ pub trait IpcBackend: Send + Sync + 'static {
     fn check(&self, terminal_id: &str, agent: &str, lines: usize) -> String;
     fn ask(&self, terminal_id: &str, agent: &str, prompt: &str) -> String;
     fn reply(&self, terminal_id: &str, request_id: &str, response: &str) -> String;
+    fn session_register(
+        &self,
+        terminal_id: &str,
+        provider: &str,
+        session_id: &str,
+        workspace_path: &str,
+    ) -> String;
     fn note_read(&self, terminal_id: &str, note_name: &str) -> String;
     fn note_write(&self, terminal_id: &str, note_name: &str, content: &str) -> String;
     fn portal_inspect(&self, terminal_id: &str, portal_name: &str) -> String;
@@ -313,7 +320,17 @@ fn route(request: CliRequest, backend: &dyn IpcBackend) -> Result<CliResponse, P
         .ok_or_else(|| ProtocolError::new(200, "error: empty command"))?;
     if !matches!(
         command,
-        "list" | "check" | "ask" | "reply" | "note" | "portal" | "recruit" | "dismiss" | "connect" | "role"
+        "list"
+            | "check"
+            | "ask"
+            | "reply"
+            | "session"
+            | "note"
+            | "portal"
+            | "recruit"
+            | "dismiss"
+            | "connect"
+            | "role"
     ) {
         return Ok(CliResponse::ok(format!(
             "error: unknown command '{command}'. Try 'omaestri list' for available commands."
@@ -339,6 +356,13 @@ fn route(request: CliRequest, backend: &dyn IpcBackend) -> Result<CliResponse, P
         "reply" if request.args.len() >= 3 => {
             backend.reply(terminal_id, &request.args[1], &request.args[2..].join(" "))
         }
+        "session" if request.args.len() == 5 && request.args[1] == "register" => backend
+            .session_register(
+                terminal_id,
+                &request.args[2],
+                &request.args[3],
+                &request.args[4],
+            ),
         "note" if request.args.len() >= 3 && request.args[1] == "read" => {
             backend.note_read(terminal_id, &request.args[2])
         }
@@ -384,6 +408,7 @@ fn route(request: CliRequest, backend: &dyn IpcBackend) -> Result<CliResponse, P
         "check" => "error: usage: omaestri check \"Agent Name\" [lines]".to_owned(),
         "ask" => "error: usage: omaestri ask \"Agent Name\" \"prompt\"".to_owned(),
         "reply" => "error: usage: omaestri reply REQUEST_ID \"response\"".to_owned(),
+        "session" => "error: invalid internal session registration request".to_owned(),
         "note" => "error: usage: omaestri note read \"Note Name\" OR omaestri note write \"Note Name\" \"content\"".to_owned(),
         "portal" => "error: usage: omaestri portal <inspect|click|fill|eval|navigate|screenshot> \"Portal Name\" [output.png|args...]".to_owned(),
         _ => unreachable!(),
@@ -667,6 +692,15 @@ mod tests {
         }
         fn reply(&self, terminal_id: &str, request_id: &str, response: &str) -> String {
             format!("reply:{terminal_id}:{request_id}:{response}")
+        }
+        fn session_register(
+            &self,
+            terminal_id: &str,
+            provider: &str,
+            session_id: &str,
+            workspace_path: &str,
+        ) -> String {
+            format!("session:{terminal_id}:{provider}:{session_id}:{workspace_path}")
         }
         fn note_read(&self, terminal_id: &str, note_name: &str) -> String {
             format!("note_read:{terminal_id}:{note_name}")
@@ -954,6 +988,23 @@ mod tests {
         );
         assert!(response.starts_with("HTTP/1.0 200 OK"));
         assert!(response.contains("maestro:manager-1:"));
+        server.shutdown();
+    }
+
+    #[test]
+    fn routes_authenticated_agent_session_registration() {
+        let server = IpcServer::bind_loopback(Arc::new(FakeBackend))
+            .unwrap()
+            .start()
+            .unwrap();
+        let response = request_with_auth(
+            server.local_addr(),
+            r#"{"args":["session","register","codex","session-123","C:\\work\\workspace.json"]}"#,
+            Some("terminal-1"),
+            Some("secret_token_123"),
+        );
+        assert!(response.starts_with("HTTP/1.0 200 OK"));
+        assert!(response.contains("session:terminal-1:codex:session-123:C:\\work\\workspace.json"));
         server.shutdown();
     }
 

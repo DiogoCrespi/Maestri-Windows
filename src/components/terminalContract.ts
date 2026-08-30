@@ -2,6 +2,7 @@ import type { TerminalSettingsInitialValues, TerminalSettingsValue } from "./Ter
 import type { TerminalContent } from "../model/workspace";
 import type { ScrollbackMetadata } from "../lib/scrollbackBridge";
 import { resolveWorkspaceWorkingDirectory } from "../lib/workingDirectory";
+import { shouldClearAgentSession } from "../lib/agentSession";
 
 export interface TerminalGraphInput {
   id: string;
@@ -78,6 +79,9 @@ export function applyTerminalSettings(
   workspaceWorkingDirectory = "C:\\",
 ): TerminalContent {
   const shellPath = settings.shellPath.trim() || content.shellPath || "powershell.exe";
+  const agentSession = shouldClearAgentSession(content, settings.agentType, settings.command)
+    ? null
+    : content.agentSession;
   return {
     ...content,
     name: settings.name.trim() || content.name,
@@ -94,6 +98,7 @@ export function applyTerminalSettings(
     agentType: settings.agentType || content.agentType,
     color: settings.color || content.color,
     icon: settings.icon || content.icon,
+    agentSession,
   };
 }
 

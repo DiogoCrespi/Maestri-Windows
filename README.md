@@ -18,6 +18,9 @@ implemented:
 - Real PowerShell, Windows PowerShell, `cmd.exe`, WSL, and custom shell sessions
   through ConPTY, including input, incremental output, resize, lifecycle,
   persisted scrollback, command, arguments, environment, and working directory.
+- Agent-session restoration for Codex, Antigravity, and Claude Code. Session
+  identifiers are stored per terminal UUID and the exact conversation is
+  resumed when the application and workspace are reopened.
 - macOS-compatible `workspace.json` schema v2 with atomic saves, autosave,
   last-workspace restoration, unknown-field preservation, and deterministic
   legacy-ID migration.
@@ -150,9 +153,21 @@ project directory:
 ```text
 workspace.json
 notes\
+.maestri\agent-sessions.json
+.maestri\agent-logs\
 .maestri\routines.json
 .maestri\scrollback\
 ```
+
+Agent-session metadata is scoped to the workspace and keyed by terminal UUID,
+so terminals with the same display name never share or overwrite a
+conversation. Antigravity terminals receive a dedicated diagnostic log under
+`agent-logs`; the backend extracts and persists the conversation UUID without
+requiring the model to invoke `omaestri`. Codex and Claude sessions are also
+captured whenever they invoke the companion CLI. Subsequent workspace launches
+use the provider's explicit resume option instead of a working-directory-based
+"last session" lookup. Changing a terminal's agent provider or command clears
+stale resume metadata.
 
 Global presets, roles, recent projects, and SSH preferences are stored outside
 the workspace. SSH credentials are not persisted in `workspace.json` or in the
@@ -160,9 +175,10 @@ remote wrapper.
 
 ## `omaestri` CLI
 
-The app injects `MAESTRI_SOCKET`, `MAESTRI_TERMINAL_ID`, and a per-session
-`MAESTRI_TOKEN` into managed terminal processes. The companion CLI uses those
-values automatically:
+The app injects `MAESTRI_SOCKET`, `MAESTRI_TERMINAL_ID`, a per-session
+`MAESTRI_TOKEN`, and workspace/agent metadata into managed terminal processes.
+The companion CLI uses those values automatically and records the active agent
+conversation without adding a user-facing setup step:
 
 ```powershell
 omaestri list
@@ -205,9 +221,9 @@ Get-ChildItem release
 
 The `release` directory contains three end-user options:
 
-- `Open-Maestri-Windows-v0.1.0-Setup.exe`: recommended per-user installer.
-- `Open-Maestri-Windows-v0.1.0.msi`: alternative Windows Installer package.
-- `Open-Maestri-Windows-v0.1.0-portable.zip`: extract and double-click
+- `Open-Maestri-Windows-v0.1.1-Setup.exe`: recommended per-user installer.
+- `Open-Maestri-Windows-v0.1.1.msi`: alternative Windows Installer package.
+- `Open-Maestri-Windows-v0.1.1-portable.zip`: extract and double-click
   `Open Maestri.exe`; keep the bundled `omaestri.exe` beside it.
 
 `SHA256SUMS.txt` contains the SHA-256 digest for every distributable artifact.

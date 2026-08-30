@@ -115,4 +115,25 @@ describe("terminal canvas contract", () => {
     expect(baseContent.scrollbackFile).toBeUndefined();
     expect(baseContent.scrollbackLineCount).toBe(0);
   });
+
+  it("clears a captured session when the terminal switches providers", () => {
+    const updated = applyTerminalSettings({
+      ...baseContent,
+      agentType: "codex",
+      command: "codex",
+      agentSession: {
+        provider: "codex",
+        sessionId: "session-123",
+        capturedAt: "1787940000000",
+      },
+    }, {
+      name: "Antigravity",
+      shellPath: "powershell.exe",
+      workingDirectory: "C:\\work",
+      command: "agy",
+      isManager: false,
+      agentType: "antGravity",
+    });
+    expect(updated.agentSession).toBeNull();
+  });
 });

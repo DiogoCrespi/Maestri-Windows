@@ -7,6 +7,11 @@ import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import { loadScrollback, recordWebScrollback } from "../lib/scrollbackBridge";
 import { TerminalContent } from "../model/workspace";
 import { applyScrollbackMetadata } from "./terminalContract";
+import {
+  commandForPersistedAgentSession,
+  isValidAgentSession,
+  providerForAgentType,
+} from "../lib/agentSession";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { LocationBadge } from "./LocationBadge";
 import { useWorkspaceStore } from "../store/workspaceStore";
@@ -15,6 +20,7 @@ export interface TerminalNodeData {
   content: TerminalContent;
   jumpNumber?: number;
   locationType?: string;
+  workspacePath?: string;
   onClose?: () => void;
   onChangeContent?: (content: TerminalContent) => void;
   [key: string]: unknown;
@@ -74,6 +80,9 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
     const shellPath = configuredShellPath || undefined;
     let disposed = false;
     let ready = false;
+    let lastAgentSessionKey = content?.agentSession
+      ? `${content.agentSession.provider}:${content.agentSession.sessionId}`
+      : "";
     const pendingInput: string[] = [];
 
     const unsubscribeData = desktopBridge.onPtyData?.(ptyId, (receivedData) => {
@@ -81,6 +90,13 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
       recordWebScrollback(ptyId, receivedData, {
         scrollbackFile: content?.scrollbackFile ?? null,
       });
+    });
+    const unsubscribeAgentSession = desktopBridge.onPtyAgentSession?.(ptyId, (session) => {
+      const sessionKey = `${session.provider}:${session.sessionId}`;
+      if (!disposed && content && isValidAgentSession(session) && sessionKey !== lastAgentSessionKey) {
+        lastAgentSessionKey = sessionKey;
+        nodeData.onChangeContent?.({ ...content, agentSession: session });
+      }
     });
 
     const onDataDisposable = term.onData((inputData) => {
@@ -103,6 +119,7 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
     };
 
     let resizeTimer: number | undefined;
+    let agentSessionTimer: number | undefined;
     let lastWidth = -1;
     let lastHeight = -1;
     const resizeObserver = new ResizeObserver(([entry]) => {
@@ -151,6 +168,46 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
 
       if (disposed) return;
       try {
+        let agentSession = content?.agentSession;
+        let agentLogPath: string | null = null;
+        const provider = providerForAgentType(content?.agentType);
+        const workspacePath = nodeData.workspacePath?.trim();
+        if (workspacePath && provider) {
+          try {
+            const launchContext = await desktopBridge.getAgentSessionLaunchContext(
+              ptyId,
+              workspacePath,
+              provider,
+            );
+            const storedSession = launchContext.session;
+            agentLogPath = launchContext.agentLogPath;
+            if (storedSession && isValidAgentSession(storedSession)) {
+              agentSession = storedSession;
+              const sessionKey = `${storedSession.provider}:${storedSession.sessionId}`;
+              if (content && sessionKey !== lastAgentSessionKey) {
+                lastAgentSessionKey = sessionKey;
+                nodeData.onChangeContent?.({ ...content, agentSession: storedSession });
+              }
+            }
+          } catch (error: unknown) {
+            throw new Error(
+              `não foi possível recuperar a conversa persistida do agente; o terminal não foi iniciado para evitar um chat novo (${String(error)})`,
+            );
+          }
+        }
+        const launchCommand = commandForPersistedAgentSession(
+          initialCommand,
+          content?.agentType,
+          agentSession,
+          agentLogPath,
+        );
+        const runtimeEnv = {
+          ...configuredEnv,
+          ...(content?.agentType ? { OPEN_MAESTRI_AGENT_TYPE: content.agentType } : {}),
+          ...(nodeData.workspacePath?.trim()
+            ? { OPEN_MAESTRI_WORKSPACE_PATH: nodeData.workspacePath.trim() }
+            : {}),
+        };
         await desktopBridge.createPty!(
           ptyId,
           term.cols,
@@ -158,8 +215,8 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
           windowsCwd,
           shellPath,
           configuredArgs,
-          configuredEnv,
-          initialCommand,
+          runtimeEnv,
+          launchCommand,
           locationType,
         );
         if (!disposed) {
@@ -168,6 +225,31 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
             void desktopBridge.writePty?.(ptyId, input).catch(() => undefined);
           }
           handleResize();
+          if (workspacePath && provider) {
+            agentSessionTimer = window.setInterval(() => {
+              void desktopBridge
+                .getAgentSessionLaunchContext(ptyId, workspacePath, provider)
+                .then((launchContext) => {
+                  if (
+                    !disposed
+                    && content
+                    && launchContext.session
+                    && isValidAgentSession(launchContext.session)
+                  ) {
+                    const sessionKey =
+                      `${launchContext.session.provider}:${launchContext.session.sessionId}`;
+                    if (sessionKey !== lastAgentSessionKey) {
+                      lastAgentSessionKey = sessionKey;
+                      nodeData.onChangeContent?.({
+                        ...content,
+                        agentSession: launchContext.session,
+                      });
+                    }
+                  }
+                })
+                .catch(() => undefined);
+            }, 2_000);
+          }
         }
       } catch (error: unknown) {
         if (!disposed) {
@@ -182,9 +264,11 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
       disposed = true;
       ready = false;
       if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
+      if (agentSessionTimer !== undefined) window.clearInterval(agentSessionTimer);
       resizeObserver.disconnect();
       onDataDisposable.dispose();
       unsubscribeData?.();
+      unsubscribeAgentSession?.();
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
@@ -379,8 +463,17 @@ export const TerminalNode: React.FC<NodeProps> = ({ id, selected, data }) => {
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
-              void desktopBridge.closePty?.(ptyId).catch(() => undefined);
-              nodeData.onClose?.();
+              void (async () => {
+                const provider = providerForAgentType(content?.agentType);
+                const workspacePath = nodeData.workspacePath?.trim();
+                if (provider && workspacePath) {
+                  await desktopBridge
+                    .getAgentSessionLaunchContext(ptyId, workspacePath, provider)
+                    .catch(() => undefined);
+                }
+                await desktopBridge.closePty?.(ptyId).catch(() => undefined);
+                nodeData.onClose?.();
+              })();
             }}
             title="Fechar terminal"
             aria-label="Fechar terminal"

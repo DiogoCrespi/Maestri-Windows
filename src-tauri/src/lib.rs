@@ -1,4 +1,5 @@
 mod access_graph;
+mod agent_session;
 mod filesystem;
 mod floors;
 mod ipc;
@@ -8,6 +9,7 @@ mod notes;
 mod portal;
 mod portal_automation;
 mod portal_capture;
+mod remote_terminal_contract;
 mod routine_commands;
 mod routine_runtime;
 mod routines;
@@ -15,8 +17,8 @@ mod scrollback;
 mod shells;
 mod ssh;
 mod ssh_contract;
-mod remote_terminal_contract;
 mod terminal;
+mod terminal_path;
 mod workspace;
 
 use std::collections::HashMap;
@@ -25,6 +27,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use access_graph::{AccessAction, AccessGraph, GraphNode, NodeType};
+use agent_session::AgentSessionRegistry;
 use ipc::{IpcBackend, IpcServer};
 use maestro::{classify_connection_type, parse_strict_ack_context, MaestroBridge, MaestroCommand};
 use serde::Serialize;
@@ -46,7 +49,10 @@ struct AgentRequestBroker {
 }
 
 impl AgentRequestBroker {
-    fn register(&self, target_terminal_id: &str) -> Result<(String, mpsc::Receiver<String>), String> {
+    fn register(
+        &self,
+        target_terminal_id: &str,
+    ) -> Result<(String, mpsc::Receiver<String>), String> {
         let mut pending = self
             .pending
             .lock()
@@ -143,6 +149,7 @@ struct TerminalIpcBackend {
     routine_runtime: Arc<routine_runtime::RoutineRuntime>,
     maestro: MaestroBridge,
     agent_requests: AgentRequestBroker,
+    agent_sessions: AgentSessionRegistry,
 }
 
 impl TerminalIpcBackend {
@@ -322,6 +329,34 @@ impl IpcBackend for TerminalIpcBackend {
         match self.agent_requests.reply(terminal_id, request_id, response) {
             Ok(()) => format!("response delivered for request {request_id}"),
             Err(error) => format!("error: {error}"),
+        }
+    }
+
+    fn session_register(
+        &self,
+        terminal_id: &str,
+        provider: &str,
+        session_id: &str,
+        workspace_path: &str,
+    ) -> String {
+        if let Err(error) = self.validate_origin(terminal_id) {
+            return error;
+        }
+        match self
+            .agent_sessions
+            .register(workspace_path, terminal_id, provider, session_id)
+        {
+            Ok(session) => {
+                let payload = serde_json::json!({
+                    "terminalId": terminal_id,
+                    "provider": session.provider,
+                    "sessionId": session.session_id,
+                    "capturedAt": session.captured_at,
+                });
+                let _ = self.app.emit("terminal://agent-session", payload);
+                "agent session registered".to_string()
+            }
+            Err(error) => format!("error: cannot register agent session: {error}"),
         }
     }
 
@@ -873,6 +908,7 @@ pub fn run() {
             let terminal = TerminalRegistry::new();
             let portal = portal::PortalRegistry::new();
             let access_graph = AccessGraph::new();
+            let agent_sessions = AgentSessionRegistry::default();
             let maestro = MaestroBridge::new(app.handle().clone());
             let main_window = app.get_webview_window("main").ok_or_else(|| {
                 std::io::Error::new(
@@ -901,6 +937,7 @@ pub fn run() {
                 routine_runtime: routine_runtime.clone(),
                 maestro,
                 agent_requests: AgentRequestBroker::default(),
+                agent_sessions: agent_sessions.clone(),
             });
             let server = IpcServer::bind_loopback(backend)?.start()?;
             let endpoint = server.local_addr().to_string();
@@ -996,6 +1033,7 @@ pub fn run() {
             app.manage(terminal.clone());
             app.manage(portal);
             app.manage(access_graph);
+            app.manage(agent_sessions);
             app.manage(ssh::SshManager::default());
             app.manage(routine_runtime.clone());
             app.manage(AppState {
@@ -1023,6 +1061,8 @@ pub fn run() {
             workspace::workspace_load,
             workspace::workspace_path_exists,
             workspace::workspace_save,
+            agent_session::agent_session_get,
+            agent_session::agent_session_launch_context,
             access_graph::access_graph_replace,
             shells::shell_list,
             filesystem::list_directory,

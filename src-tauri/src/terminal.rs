@@ -5,7 +5,7 @@
 //! operations go through the thread-safe registry below.
 
 use std::collections::{HashMap, VecDeque};
-use std::ffi::{c_void, OsStr, OsString};
+use std::ffi::c_void;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
+
+use crate::terminal_path::build_child_path;
 
 const DEFAULT_SHELL: &str = "powershell.exe";
 const MAX_ID_BYTES: usize = 256;
@@ -695,19 +697,30 @@ fn build_command(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
 
-    // Discover omaestri.exe and prepend to PATH + export MAESTRI_CLI path
+    // Discover omaestri.exe and publish a child PATH that also contains
+    // concrete Windows system directories. Some launch environments preserve
+    // entries such as `%SYSTEMROOT%\...` literally; process lookup does not
+    // reliably expand those entries, so tools embedded in agents cannot find
+    // powershell.exe even though Windows PowerShell is installed.
     let current_exe = std::env::current_exe().ok();
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if let Some(cli_dir) =
-        discover_omaestri_dir(current_exe.as_deref(), manifest_dir, |candidate| {
-            candidate.is_file()
-        })
-    {
-        if let Some(child_path) = prepend_path_entry(&cli_dir, std::env::var_os("PATH").as_deref())
-        {
-            command.env("PATH", child_path);
-        }
-        let exe_name = if cli_dir.join("maestri.exe").is_file() { "maestri.exe" } else { "omaestri.exe" };
+    let cli_dir = discover_omaestri_dir(current_exe.as_deref(), manifest_dir, |candidate| {
+        candidate.is_file()
+    });
+    let system_root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("WINDIR"));
+    if let Some(child_path) = build_child_path(
+        cli_dir.as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        system_root.as_deref(),
+    ) {
+        command.env("PATH", child_path);
+    }
+    if let Some(cli_dir) = cli_dir {
+        let exe_name = if cli_dir.join("maestri.exe").is_file() {
+            "maestri.exe"
+        } else {
+            "omaestri.exe"
+        };
         let full_cli_path = cli_dir.join(exe_name);
         command.env("MAESTRI_CLI", full_cli_path.to_string_lossy().as_ref());
     }
@@ -814,14 +827,6 @@ where
         .into_iter()
         .find(|candidate| is_file(candidate))
         .and_then(|candidate| candidate.parent().map(Path::to_path_buf))
-}
-
-fn prepend_path_entry(entry: &Path, current_path: Option<&OsStr>) -> Option<OsString> {
-    let mut entries = vec![entry.to_path_buf()];
-    if let Some(current_path) = current_path {
-        entries.extend(std::env::split_paths(current_path));
-    }
-    std::env::join_paths(entries).ok()
 }
 
 fn start_threads<R: Runtime>(
@@ -1873,16 +1878,6 @@ mod tests {
             .to_string_lossy()
             .replace('\\', "/")
             .ends_with("src-cli/target/debug"));
-    }
-
-    #[test]
-    fn cli_path_prepend_is_child_only_and_preserves_process_path() {
-        let original_path = std::env::var_os("PATH");
-        let child_path = prepend_path_entry(Path::new("cli"), Some(OsStr::new("existing")))
-            .expect("PATH should be joinable");
-        let child_entries: Vec<_> = std::env::split_paths(&child_path).collect();
-        assert_eq!(child_entries.first(), Some(&PathBuf::from("cli")));
-        assert_eq!(std::env::var_os("PATH"), original_path);
     }
 
     #[test]

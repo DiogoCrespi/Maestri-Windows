@@ -111,6 +111,16 @@ describe("CanvasWorkspace grid and duplication helpers", () => {
       scrollbackFile: "new.log",
       scrollbackLineCount: 9,
     });
+
+    const withSession = mergeTerminalScrollbackMetadata(current, {
+      agentSession: {
+        provider: "codex",
+        sessionId: "session-123",
+        capturedAt: "1787940000000",
+      },
+    });
+    expect(withSession.changed).toBe(true);
+    expect(withSession.content.agentSession?.sessionId).toBe("session-123");
   });
 });
 
